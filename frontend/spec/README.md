@@ -75,6 +75,7 @@ frontend/
 | 功能点 | 阅读文件 |
 |--------|---------|
 | 任务管理模块 | [./task_management.md](./task_management.md) |
+| 公司 / 项目管理模块 | [./company_project.md](./company_project.md) |
 
 ---
 

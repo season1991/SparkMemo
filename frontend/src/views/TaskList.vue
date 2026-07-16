@@ -18,6 +18,7 @@ import { useProjectStore } from '../stores/useProjectStore.js'
 import { ApiError, showApiError } from '../api/client.js'
 import TaskForm from '../components/TaskForm.vue'
 import TypeManager from '../components/TypeManager.vue'
+import CompanyProjectManager from '../components/CompanyProjectManager.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,6 +31,7 @@ const formVisible = ref(false)
 const formMode = ref('create')
 const editingTask = ref(null)
 const typeDialogVisible = ref(false)
+const companyProjectDialogVisible = ref(false)
 const loadFailed = ref(false)
 
 let keywordTimer = null
@@ -175,8 +177,24 @@ async function onFormSaved() {
   await loadWithCatch()
 }
 
+async function onCompaniesChanged() {
+  // 刷新公司下拉
+  await companyStore.fetchAll()
+}
+
+async function onProjectsChanged() {
+  // 刷新项目下拉（按当前选中的公司）
+  if (taskStore.filters.company_id) {
+    await projectStore.fetchByCompany(taskStore.filters.company_id)
+  }
+}
+
 function openTypeManager() {
   typeDialogVisible.value = true
+}
+
+function openCompanyProjectManager() {
+  companyProjectDialogVisible.value = true
 }
 
 async function retryLoad() {
@@ -198,6 +216,7 @@ function onRemoveFilter(key) {
     <div class="action-bar">
       <div class="action-left">
         <el-button @click="openTypeManager">管理类型</el-button>
+        <el-button @click="openCompanyProjectManager">管理公司项目</el-button>
       </div>
       <div class="action-right">
         <el-button type="primary" @click="openCreate">+ 新建任务</el-button>
@@ -398,6 +417,11 @@ function onRemoveFilter(key) {
       @saved="onFormSaved"
     />
     <TypeManager v-model="typeDialogVisible" />
+    <CompanyProjectManager
+      v-model="companyProjectDialogVisible"
+      @companies-changed="onCompaniesChanged"
+      @projects-changed="onProjectsChanged"
+    />
   </div>
 </template>
 
