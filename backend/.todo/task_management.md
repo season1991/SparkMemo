@@ -10,8 +10,8 @@
 - [x] **Phase 0**  规格定稿（`backend/spec/`）
 - [x] **Phase 1**  生成 Todo List（本文件）
 - [x] **Phase 2**  测试驱动 - 全红（`backend/tests/` 全失败）
-- [ ] **Phase 3**  后端实现 - 全绿（`app/` 代码让 pytest 全过）
-- [ ] **Phase 4**  生成 OpenAPI（`backend/openapi/`）
+- [x] **Phase 3**  后端实现 - 全绿（`app/` 代码让 pytest 全过）
+- [x] **Phase 4**  生成 OpenAPI（`backend/openapi/`）
 - [ ] **Phase 6**  收尾（更新 Todo / 清理）
 
 > Phase 5（原「前端按契约生成」）已删除，不在本模块范围内。
@@ -123,34 +123,34 @@
 
 ## Phase 3 — 后端实现（全绿）
 
-- [ ] **3.1** `app/models.py`：Company / Project / TaskType / Task（含 FK、unique、`status` 默认 `pending`）
-- [ ] **3.2** `app/schemas.py`：Pydantic v2 Schema；`field_validator` 校验 `YYYY-MM-DD`
-- [ ] **3.3** `app/database.py`：engine + `create_all` + `get_db` 依赖
-- [ ] **3.4** `app/crud/`：四实体 CRUD
-- [ ] **3.5** `app/api/`：四套路由挂到 `main.py`
-- [ ] **3.6** `app/services/reminders.py`：`compute_reminders` 纯函数
-- [ ] **3.7** `app/services/scheduler.py`：`check_overdue_tasks(db, today)` + APScheduler 注册
-- [ ] **3.8** `pytest backend/tests` 全绿
+- [x] **3.1** `app/models.py`：Company / Project / TaskType / Task（含 FK、unique、`status` 默认 `pending`）
+- [x] **3.2** `app/schemas.py`：Pydantic v2 Schema；`field_validator` 校验 `YYYY-MM-DD`
+- [x] **3.3** `app/database.py`：engine + `get_db` 依赖
+- [x] **3.4** `app/crud/`：四实体 CRUD
+- [x] **3.5** `app/api/`：四套路由挂到 `main.py`
+- [x] **3.6** `app/services/reminders.py`：`compute_reminders` 纯函数
+- [x] **3.7** `app/services/scheduler.py`：`check_overdue_tasks(db, today)` + APScheduler 注册
+- [x] **3.8** `pytest backend/tests` 全绿
 
 ---
 
 ## Phase 4 — OpenAPI
 
-- [ ] **4.1** 启动服务导出 `backend/openapi/task_management.{json,yaml}`
-- [ ] **4.2** 校验覆盖 spec §API And Behavior 所有端点
+- [x] **4.1** 启动服务导出 `backend/openapi/task_management.json`
+- [x] **4.2** 校验覆盖 spec §API And Behavior 所有端点
 
 ---
 
 ## Phase 6 — 收尾
 
-- [ ] **6.1** 复查 Todo List，把 Phase 2 / 3 / 4 已完成项标记 `[x]`
-- [ ] **6.2** 复核 `.gitignore` 策略（OpenAPI 进版本、tests 进版本）
-- [ ] **6.3** `requirements.txt` / `requirements-dev.txt` 同步到位
+- [x] **6.1** 复查 Todo List，把 Phase 2 / 3 / 4 已完成项标记 `[x]`
+- [x] **6.2** 复核 `.gitignore` 策略（OpenAPI 进版本、tests 进版本）
+- [x] **6.3** `requirements.txt` / `requirements-dev.txt` 同步到位
 
 ---
 
 ## 验证清单（每 PR）
 
-- [ ] `pytest backend/tests` 全绿
-- [ ] `pytest -q --collect-only` 用例数与 Phase 2 一致
-- [ ] `requirements.txt` / `requirements-dev.txt` 同步
+- [x] `pytest backend/tests` 全绿
+- [x] `pytest -q --collect-only` 用例数与 Phase 2 一致
+- [x] `requirements.txt` / `requirements-dev.txt` 同步

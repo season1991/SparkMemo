@@ -1,7 +1,19 @@
 # SparkMemo Pydantic 模式
+from datetime import date as _date
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+def _validate_yyyy_mm_dd(value: Optional[str], field_name: str) -> Optional[str]:
+    """校验 YYYY-MM-DD 格式；端点层捕获 ValueError 后返回 400。"""
+    if value is None:
+        return value
+    try:
+        _date.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be YYYY-MM-DD") from exc
+    return value
 
 
 class CompanyBase(BaseModel):
@@ -41,7 +53,7 @@ class CompanyListResponse(BaseModel):
 
 
 class ProjectBase(BaseModel):
-    """项目基础字段：company_id 和 name 必填，notes 可空。"""
+    """项目基础字段：name 必填，notes 可空；company_id 由端点校验。"""
 
     name: str
     notes: Optional[str] = None
@@ -112,7 +124,7 @@ class TaskTypeRead(TaskTypeBase):
 
 
 class TaskBase(BaseModel):
-    """任务基础字段：title 必填，其他字段在端点层校验。"""
+    """任务基础字段：title 必填，日期字段由 field_validator 校验 YYYY-MM-DD。"""
 
     title: str
     description: Optional[str] = None
@@ -120,21 +132,26 @@ class TaskBase(BaseModel):
     due_at: str
     remind_start_at: Optional[str] = None
 
+    @field_validator("due_at")
+    @classmethod
+    def _check_due_at(cls, value: str) -> str:
+        return _validate_yyyy_mm_dd(value, "due_at")
 
-class TaskCreate(BaseModel):
-    """创建任务请求体：company_id/project_id 缺失返回 400，不存在返回 422。"""
+    @field_validator("remind_start_at")
+    @classmethod
+    def _check_remind_start_at(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_yyyy_mm_dd(value, "remind_start_at")
 
-    title: str
-    description: Optional[str] = None
-    task_type_id: Optional[int] = None
+
+class TaskCreate(TaskBase):
+    """创建任务请求体：company_id/project_id 由端点层校验，缺失返回 400。"""
+
     company_id: Optional[int] = None
     project_id: Optional[int] = None
-    due_at: str
-    remind_start_at: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
-    """更新任务请求体：全量替换字段。"""
+    """更新任务请求体：全量替换字段，日期字段由 field_validator 校验。"""
 
     title: str
     description: Optional[str] = None
@@ -143,6 +160,16 @@ class TaskUpdate(BaseModel):
     project_id: int
     due_at: str
     remind_start_at: str
+
+    @field_validator("due_at")
+    @classmethod
+    def _check_due_at(cls, value: str) -> str:
+        return _validate_yyyy_mm_dd(value, "due_at")
+
+    @field_validator("remind_start_at")
+    @classmethod
+    def _check_remind_start_at(cls, value: str) -> str:
+        return _validate_yyyy_mm_dd(value, "remind_start_at")
 
 
 class TaskTypeRef(BaseModel):
