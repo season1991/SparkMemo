@@ -2,7 +2,7 @@
 
 > 适配规格：`backend/spec/task_management.md`（SparkMemo v0.1）
 > 测试策略：按 spec §5.1，**先全红后全绿**。Phase 2 产物仅 `backend/tests/`，运行 `pytest` 期望全部失败（含 `ImportError` / `AttributeError` / `404`）。
-> 测试 DB：复用开发 MySQL 实例；conftest 切到 `sparkmemo_test` Schema；session 级建表 / 拆表，per-test TRUNCATE。
+> 测试 DB：复用开发 MySQL Schema `sparkmemo`（与开发库同名）；session 级 `create_all` / `drop_all`，per-test TRUNCATE 四表做隔离。
 > 测试组织：按实体分文件（`test_companies` / `test_projects` / `test_task_types` / `test_tasks` / `test_reminders` / `test_overdue_job`）。
 
 ## 总体阶段
@@ -24,7 +24,7 @@
 
 - [ ] **2.0.1** 新建 `backend/tests/__init__.py`（空）
 - [ ] **2.0.2** 新建 `backend/tests/conftest.py`
-  - 覆写 `settings.DATABASE_URL` 指 `sparkmemo_test`
+  - 沿用 `settings.DATABASE_URL`（Schema = `sparkmemo`，与开发库一致）
   - `engine` fixture：session 级 `create_all` / `drop_all`
   - `db` fixture：每用例 `TRUNCATE` 四张表（依赖外键时先关 FK_CHECKS）
   - `client` fixture：`httpx.AsyncClient(app=app, base_url='http://testserver')`
