@@ -11,38 +11,54 @@
 
 ### 1.1 路由与视图
 
-| 路径 | 视图 | 说明 |
-|------|------|------|
-| `/` | `views/TaskList.vue` | 任务列表（默认全部状态） |
-| `/tasks/today` | `views/TaskList.vue` | 任务列表（仅今日待提醒） |
-| `/settings` | `views/Settings.vue` | 占位页，不在本规格范围 |
+| 路径 | 视图 | 侧边栏激活项 | 页面页头标题（`route.meta.title`） | 说明 |
+|------|------|------------|----------------------------------|------|
+| `/` | `views/TaskList.vue` | 任务管理 | 任务管理 | 任务列表（默认全部状态） |
+| `/tasks/today` | `views/TaskList.vue` | 今日待提醒 | 今日待提醒 | 任务列表（仅今日待提醒） |
+| `/settings` | `views/Settings.vue` | — | 设置 | 占位页，不在本规格范围 |
 
-> 两个路由共用同一视图，靠路由 meta 决定初始 filters（`remind_today` / `status`）。
+> 两个 `/tasks*` 路由共用同一视图，靠路由 meta 决定初始 filters（`remind_today` / `status`）和页头标题。侧边栏导航点击 → `router.push` 切换路由。
 
 ### 1.2 主页 DOM 结构
 
+布局遵循 [README §5.2](./README.md#52-布局)：左 220px 导航 + 右侧 56px 页面页头 + 主内容区。
+
 ```
-<el-container>
-  <el-header />                 ← App.vue 顶部 Header
-  <el-main>
-    <TaskListView>
-      ┌─ 筛选条 ─────────────────────────────────────┐
-      │ [公司] [项目] [类型] [状态] [关键词] [今日开关]│
-      │ [重置]                          [+ 新建任务]  │
-      │                                            [管理类型] │
-      └────────────────────────────────────────────┘
-      ┌─ 列表区 ─────────────────────────────────────┐
-      │ <el-table>                                  │
-      │   列：title / type / company / project /     │
-      │        due_at / remind_start_at / status /   │
-      │        操作（编辑 / 完成 / 删除）            │
-      └────────────────────────────────────────────┘
-      ┌─ 分页器 ─────────────────────────────────────┐
-      │ <el-pagination total / sizes / pager />      │
-      └────────────────────────────────────────────┘
-    </TaskListView>
-  </el-main>
-</el-container>
+<AppLayout>
+  <AppSidebar>                          ← 220px 固定
+    ├─ Logo 区（64px）：⚡ SparkMemo
+    └─ 导航项（44px × N，间距 4px）
+         - 任务管理  (icon: List)
+         - 今日待提醒 (icon: Bell)
+         - （预留位）
+  </AppSidebar>
+  <AppPage>                             ← 右侧容器
+    <AppHeader>                         ← 56px 页面页头
+      ├─ 左：<h1>{{ route.meta.title }}</h1>
+      └─ 右：信息展示位（v0.1 留空）
+    </AppHeader>
+    <AppMain>                           ← 主内容区，max-width 1440px 居中
+      <TaskListView>
+        ┌─ 操作条 ─────────────────────────────────────┐
+        │ [管理类型]                       [+ 新建任务] │
+        └────────────────────────────────────────────┘
+        ┌─ 筛选条 ─────────────────────────────────────┐
+        │ [公司] [项目] [类型] [状态] [关键词] [今日开关]│
+        │ [重置]                                       │
+        └────────────────────────────────────────────┘
+        ┌─ 列表区 ─────────────────────────────────────┐
+        │ <el-table>                                  │
+        │   列：title / type / company / project /     │
+        │        due_at / remind_start_at / status /   │
+        │        操作（编辑 / 完成 / 删除）            │
+        └────────────────────────────────────────────┘
+        ┌─ 分页器 ─────────────────────────────────────┐
+        │ <el-pagination total / sizes / pager />      │
+        └────────────────────────────────────────────┘
+      </TaskListView>
+    </AppMain>
+  </AppPage>
+</AppLayout>
 
 <!-- 浮层（按需挂载，单实例） -->
 <el-drawer>      ← TaskForm（新建 / 编辑）
@@ -54,7 +70,10 @@
 
 | 类型 | 名称 | 职责 |
 |------|------|------|
-| View | `views/TaskList.vue` | 主页骨架，组合筛选条 / 列表 / 分页器，承载浮层 |
+| Layout | `layouts/AppLayout.vue` | 整体布局容器：左 Sidebar + 右侧 Page |
+| Layout | `layouts/AppSidebar.vue` | 左侧导航条（Logo + 导航项），高亮当前路由 |
+| Layout | `layouts/AppHeader.vue` | 页面页头，左侧渲染 `route.meta.title`，右侧信息展示位 |
+| View | `views/TaskList.vue` | 主页骨架，组合操作条 / 筛选条 / 列表 / 分页器，承载浮层 |
 | Component | `components/TaskForm.vue` | 任务新建 / 编辑表单（抽屉承载） |
 | Component | `components/TaskItem.vue` | 行内展示（实际由 `<el-table>` 列模板承担；保留作可复用行组件） |
 | Component | `components/ReminderChips.vue` | 编辑模式下展示 `task.reminders` |
@@ -64,6 +83,16 @@
 | Store | `stores/useCompanyStore.js` | 公司全量字典（供下拉） |
 | Store | `stores/useProjectStore.js` | 项目列表 + 按公司分组 |
 | API | `api/tasks.js` / `api/taskTypes.js` / `api/companies.js` / `api/projects.js` / `api/client.js` | axios 实例与按域函数 |
+
+侧边栏导航项数据源（v0.1）：
+
+| 名称 | 图标 | 路由 |
+|------|------|------|
+| 任务管理 | `List` | `/` |
+| 今日待提醒 | `Bell` | `/tasks/today` |
+| （预留位） | — | — |
+
+> 侧边栏激活判断：`route.path` 命中项即激活；样式按 README §5.2 规范（左 3px 主色竖条 + 浅主色背景 `#ecf5ff` + 文字主色）。
 
 ### 1.4 状态机
 
@@ -96,10 +125,12 @@ UI 操作可见性：
 
 #### 入口
 - 浏览器访问 `/` 或 `/tasks/today`；
-- 顶部 Header 中部 tab 切换：「全部 / 今日待提醒」。
+- 左侧导航条点击「任务管理」→ `/`；点击「今日待提醒」→ `/tasks/today`。
 
 #### 静态展示规则
-- 标题：左侧「SparkMemo」Logo，右侧「设置」入口（占位）；
+- 左侧导航条：Logo「⚡ SparkMemo」在顶部；当前路由对应项激活（左侧 3px 主色竖条 + 浅主色背景）；
+- 页面页头：左侧显示 `route.meta.title`（`/` → 「任务管理」，`/tasks/today` → 「今日待提醒」），右侧信息展示位 v0.1 留空；
+- 操作条：左上 `管理类型` 按钮，右上 `+ 新建任务` 按钮；
 - 筛选条：默认全部为空；「今日待提醒」开关默认关（`/`）或开（`/tasks/today`）；
 - 列表列：`title / 类型 / 公司 / 项目 / 截止日 / 提醒起 / 状态 / 操作`；
 - 状态列：按 [README §3.5.1](./README.md) 颜色映射；
@@ -111,17 +142,29 @@ UI 操作可见性：
 | 阶段 | 内容 |
 |------|------|
 | 操作前 | 路由切换完成，组件已 mount |
-| 触发动作 | `App.vue` 的 `onMounted` 并行触发 3 个字典加载 + `useTaskStore.fetchList()` |
+| 触发动作 | `AppLayout`（或 `App.vue`）的 `onMounted` 并行触发 3 个字典加载 + `useTaskStore.fetchList()` |
 | 接口请求 | `GET /api/task-types`<br>`GET /api/companies`<br>`GET /api/projects`<br>`GET /api/tasks?page=1&size=20`（`/tasks/today` 时附加 `&remind_today=true&status=pending`） |
 | 成功逻辑 | store 写入 `types / companies / projects / tasks / total`；列表与分页器渲染；筛选条下拉数据源就绪 |
 | 失败逻辑 | 字典加载失败 → toast + 筛选条下拉为空（仍可提交，等用户手动触发）；列表加载失败 → toast + 列表区显示「加载失败，点此重试」 |
+
+#### 交互逻辑：侧边栏导航切换
+
+| 阶段 | 内容 |
+|------|------|
+| 操作前 | 当前路由 `/` 或 `/tasks/today` |
+| 触发动作 | 点击侧边栏另一导航项 |
+| 路由跳转 | `router.push('/tasks/today')` 或 `router.push('/')` |
+| 接口请求 | 路由变化后 `TaskList` 的 `onBeforeRouteUpdate` 触发 `fetchList()`，新 `filters`（由新路由 meta 决定）请求一次 |
+| 成功逻辑 | 列表替换；页头标题切换；侧边栏高亮切换 |
+| 失败逻辑 | 路由仍切换（已跳转），列表区显示「加载失败，点此重试」+ toast |
 
 ---
 
 ### 2.2 功能点：筛选条件变化
 
 #### 入口
-- 筛选条中任一控件：`<el-select>` 公司 / 项目 / 类型 / 状态、`<el-input>` 关键词、`<el-switch>` 今日待提醒。
+- 筛选条中任一控件：`<el-select>` 公司 / 项目 / 类型 / 状态、`<el-input>` 关键词、`<el-switch>` 今日待提醒；
+- 「今日待提醒」也可通过侧边栏导航项直接触发路由切换（见 §2.1 侧边栏导航切换）。
 
 #### 静态展示规则
 - 关键词输入框宽度 200px，含清空按钮；
@@ -147,6 +190,8 @@ UI 操作可见性：
 | 接口请求 | 开 → `GET /api/tasks?remind_today=true&status=pending&page=1&size=20`<br>关 → `GET /api/tasks?remind_today=false&{其它筛选}&page=1&size=20`（`status` 恢复用户先前选择） |
 | 成功逻辑 | 列表更新；URL hash 不变（hash 路由不持久化查询参数） |
 | 失败逻辑 | 开关回弹 + toast |
+
+> 开关与侧边栏导航项等价：打开开关等同于跳到 `/tasks/today`，关闭等同于跳回 `/`。若两者产生竞态，以最后一次操作为准（开关会同步路由）。
 
 ---
 
@@ -185,7 +230,7 @@ UI 操作可见性：
 ### 2.4 功能点：新建任务
 
 #### 入口
-- 主页顶部右侧 `+ 新建任务` 按钮。
+- 主页操作条右上 `+ 新建任务` 按钮（在筛选条上方，与 `管理类型` 同行）。
 
 #### 静态展示规则
 - 抽屉（`<el-drawer>`）从右侧滑入，宽度 560px；
@@ -334,7 +379,7 @@ UI 操作可见性：
 ### 2.8 功能点：管理任务类型（弹窗）
 
 #### 入口
-- 主页顶部 `管理类型` 按钮。
+- 主页操作条左上 `管理类型` 按钮（与 `+ 新建任务` 同行，位于筛选条上方）。
 
 #### 静态展示规则
 - 对话框（`<el-dialog>`）宽度 800px，居中；
@@ -399,7 +444,7 @@ UI 操作可见性：
 | 阶段 | 内容 |
 |------|------|
 | 操作前 | 主页未加载 |
-| 触发动作 | `App.vue` mount |
+| 触发动作 | `AppLayout` mount（全局仅触发一次） |
 | 接口请求 | `GET /api/companies`<br>`GET /api/projects`（全量） |
 | 成功逻辑 | store 写入 |
 | 失败逻辑 | toast「字典加载失败」+ 下拉为空 |
@@ -442,10 +487,12 @@ UI 操作可见性：
 - **步骤**：
   1. `page.goto('http://localhost:5173/')`；
   2. 等待 `el-table` 出现；
-  3. 断言：标题「SparkMemo」可见；
-  4. 断言：列表区显示「暂无数据」；
-  5. 断言：分页器显示「共 0 条」；
-  6. 断言：`+ 新建任务`、`管理类型` 按钮可见。
+  3. 断言：侧边栏 Logo「⚡ SparkMemo」可见；
+  4. 断言：侧边栏「任务管理」项激活，「今日待提醒」项未激活；
+  5. 断言：页面页头标题「任务管理」可见；
+  6. 断言：列表区显示「暂无数据」；
+  7. 断言：分页器显示「共 0 条」；
+  8. 断言：操作条 `+ 新建任务`、`管理类型` 按钮可见。
 - **预期**：页面正常渲染，无错误弹窗。
 
 #### TC-TM-02 筛选公司下拉
@@ -543,17 +590,18 @@ UI 操作可见性：
   7. 断言网络收到 `GET /api/tasks?...&page=1&size=50`。
 - **预期**：分页正常。
 
-#### TC-TM-10 今日待提醒
+#### TC-TM-10 今日待提醒（侧边栏导航 + 开关）
 - **前置**：存在 3 条任务，1 条 `remind_start_at ≤ today ≤ due_at`、1 条尚未到提醒起、1 条已逾期；
 - **步骤**：
-  1. 进入主页（默认全部）；
-  2. 断言列表显示 3 条；
-  3. 切换 tab 至「今日待提醒」；
-  4. 断言网络收到 `GET /api/tasks?remind_today=true&status=pending&page=1&size=20`；
-  5. 断言列表仅显示 1 条（提醒区间含今天）；
-  6. 切换回「全部」；
-  7. 断言列表恢复 3 条。
-- **预期**：今日筛选生效。
+  1. 进入主页（默认全部，路由 `/`）；
+  2. 断言列表显示 3 条；侧边栏「任务管理」激活；
+  3. 点击侧边栏「今日待提醒」；
+  4. 断言路由变为 `/tasks/today`；页面页头标题变为「今日待提醒」；
+  5. 断言网络收到 `GET /api/tasks?remind_today=true&status=pending&page=1&size=20`；
+  6. 断言列表仅显示 1 条（提醒区间含今天）；
+  7. 关闭筛选条中的「今日待提醒」开关；
+  8. 断言路由回到 `/`；列表恢复 3 条。
+- **预期**：侧边栏导航与筛选开关双向联动生效。
 
 #### TC-TM-11 任务类型管理 - 新建
 - **前置**：无特殊前置；

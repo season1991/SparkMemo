@@ -11,7 +11,7 @@ const routes = [
     path: '/',
     name: 'TaskList',
     component: TaskList,
-    meta: { remindToday: false, title: '全部任务' }
+    meta: { remindToday: false, title: '任务管理' }
   },
   {
     path: '/tasks/today',
@@ -22,7 +22,8 @@ const routes = [
   {
     path: '/settings',
     name: 'Settings',
-    component: Settings
+    component: Settings,
+    meta: { title: '设置' }
   }
 ]
 

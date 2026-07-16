@@ -1,11 +1,15 @@
 <script setup>
 /**
- * 任务列表视图：筛选条 + 任务表 + 分页器。
+ * 任务列表视图：操作条 + 筛选条 + 任务表 + 分页器。
  * 浮层：TaskForm（新建 / 编辑）、TypeManager（任务类型管理）。
  * 行为完全遵循 spec/task_management.md §2 功能点。
+ *
+ * 路由 / 筛选双向联动：
+ *   - 路由变化 → watch(route.path) 同步 filters.remind_today + 加载
+ *   - 筛选条「今日开关」变化 → onRemindTodayChange：与当前路由不一致时 router.push
  */
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTaskStore } from '../stores/useTaskStore.js'
 import { useTypeStore } from '../stores/useTypeStore.js'
@@ -16,6 +20,7 @@ import TaskForm from '../components/TaskForm.vue'
 import TypeManager from '../components/TypeManager.vue'
 
 const route = useRoute()
+const router = useRouter()
 const taskStore = useTaskStore()
 const typeStore = useTypeStore()
 const companyStore = useCompanyStore()
@@ -40,19 +45,17 @@ const availableProjects = computed(() => {
 watch(
   () => route.path,
   async () => {
-    taskStore.filters.remind_today = remindToday.value
-    if (remindToday.value) {
-      taskStore.filters.status = 'pending'
+    const next = remindToday.value
+    if (taskStore.filters.remind_today !== next) {
+      taskStore.syncRemindTodayFromRoute(next)
     }
     await loadWithCatch()
-  },
-  { immediate: false }
+  }
 )
 
 onMounted(async () => {
-  taskStore.filters.remind_today = remindToday.value
-  if (remindToday.value) {
-    taskStore.filters.status = 'pending'
+  if (taskStore.filters.remind_today !== remindToday.value) {
+    taskStore.syncRemindTodayFromRoute(remindToday.value)
   }
   keywordInput.value = taskStore.filters.keyword || ''
   await loadWithCatch()
@@ -81,7 +84,12 @@ function onCompanyFilterChange(val) {
 }
 
 function onRemindTodayChange(val) {
-  taskStore.toggleRemindToday(val)
+  const wantToday = Boolean(val)
+  if (remindToday.value !== wantToday) {
+    router.push(wantToday ? '/tasks/today' : '/')
+    return
+  }
+  taskStore.toggleRemindToday(wantToday)
 }
 
 async function onPageChange(page) {
@@ -174,10 +182,28 @@ function openTypeManager() {
 async function retryLoad() {
   await loadWithCatch()
 }
+
+function onRemoveFilter(key) {
+  if (key === 'remind_today' && remindToday.value) {
+    router.push('/')
+    return
+  }
+  taskStore.removeFilter(key)
+}
 </script>
 
 <template>
   <div class="task-list-view">
+    <!-- 操作条 -->
+    <div class="action-bar">
+      <div class="action-left">
+        <el-button @click="openTypeManager">管理类型</el-button>
+      </div>
+      <div class="action-right">
+        <el-button type="primary" @click="openCreate">+ 新建任务</el-button>
+      </div>
+    </div>
+
     <!-- 筛选条 -->
     <el-card shadow="never" class="filter-card">
       <div class="filter-row">
@@ -249,17 +275,12 @@ async function retryLoad() {
         />
 
         <el-switch
-          :model-value="taskStore.filters.remind_today"
+          :model-value="remindToday"
           @update:model-value="onRemindTodayChange"
           active-text="今日待提醒"
         />
 
         <el-button @click="resetAll">重置</el-button>
-
-        <div class="filter-spacer" />
-
-        <el-button @click="openTypeManager">管理类型</el-button>
-        <el-button type="primary" @click="openCreate">+ 新建任务</el-button>
       </div>
 
       <!-- 已生效筛选条件 tag -->
@@ -269,7 +290,7 @@ async function retryLoad() {
           :key="tag.key"
           closable
           type="info"
-          @close="taskStore.removeFilter(tag.key)"
+          @close="onRemoveFilter(tag.key)"
         >
           {{ tag.label }}
         </el-tag>
@@ -386,6 +407,16 @@ async function retryLoad() {
   flex-direction: column;
   gap: 16px;
 }
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.action-left,
+.action-right {
+  display: flex;
+  gap: 12px;
+}
 .filter-card :deep(.el-card__body) {
   padding: 16px;
 }
@@ -394,9 +425,6 @@ async function retryLoad() {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-}
-.filter-spacer {
-  flex: 1;
 }
 .active-tags {
   margin-top: 12px;

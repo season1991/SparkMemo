@@ -1,15 +1,13 @@
 <script setup>
 /**
  * 设置页占位：通知推送模块启动后实装。
+ * 页面标题由 layouts/AppHeader 渲染，此处不重复。
  */
 </script>
 
 <template>
   <div class="settings-view">
     <el-card shadow="never">
-      <template #header>
-        <span>设置</span>
-      </template>
       <div class="placeholder">
         <p>通知推送开发中</p>
         <p class="hint">待后端补齐 WebSocket / notifications 接口后启动实装。</p>

@@ -21,6 +21,7 @@ export const useTaskStore = defineStore('task', {
       page: 1,
       size: 20
     },
+    savedStatus: '',
     loading: false,
     error: null,
     current: null
@@ -58,13 +59,26 @@ export const useTaskStore = defineStore('task', {
       this.filters.page = 1
       return this.fetchList(false)
     },
-    toggleRemindToday(on) {
+    _applyRemindToday(on) {
+      if (this.filters.remind_today === on) return false
       this.filters.remind_today = on
       if (on) {
+        this.savedStatus = this.filters.status
         this.filters.status = 'pending'
+      } else {
+        this.filters.status = this.savedStatus || ''
+        this.savedStatus = ''
       }
       this.filters.page = 1
+      return true
+    },
+    toggleRemindToday(on) {
+      const changed = this._applyRemindToday(on)
+      if (!changed) return
       return this.fetchList(false)
+    },
+    syncRemindTodayFromRoute(on) {
+      this._applyRemindToday(on)
     },
     resetFilters() {
       this.filters = {
@@ -79,13 +93,19 @@ export const useTaskStore = defineStore('task', {
         page: 1,
         size: this.filters.size
       }
+      this.savedStatus = ''
       return this.fetchList(false)
     },
     removeFilter(key) {
       if (key === 'remind_today') {
-        this.filters.remind_today = false
+        if (this.filters.remind_today) {
+          this.filters.remind_today = false
+          this.filters.status = this.savedStatus || ''
+          this.savedStatus = ''
+        }
       } else if (key === 'status') {
         this.filters.status = ''
+        this.savedStatus = ''
       } else if (key === 'company_id') {
         this.filters.company_id = null
         this.filters.project_id = null
