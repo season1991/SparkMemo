@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DayPlan · 今日任务管理</title>
+<style>
+  :root {
+    --bg: oklch(98.2% 0.012 85);
+    --surface: oklch(100% 0 0);
+    --surface-2: oklch(96.5% 0.014 85);
+    --fg: oklch(24% 0.025 250);
+    --fg-soft: oklch(34% 0.022 250);
+    --muted: oklch(54% 0.018 250);
+    --border: oklch(91% 0.012 95);
+    --border-strong: oklch(82% 0.014 95);
+    --accent: oklch(62% 0.13 178);
+    --accent-soft: oklch(94% 0.04 178);
+    --accent-ink: oklch(28% 0.06 178);
+    --warn: oklch(75% 0.14 70);
+    --warn-soft: oklch(95% 0.05 70);
+    --danger: oklch(64% 0.18 25);
+    --success: oklch(65% 0.16 145);
+    --success-soft: oklch(94% 0.05 145);
+    --shadow-card: 0 1px 2px rgba(20, 30, 50, 0.04), 0 8px 24px rgba(20, 30, 50, 0.05);
+    --shadow-hover: 0 2px 4px rgba(20, 30, 50, 0.06), 0 16px 36px rgba(20, 30, 50, 0.08);
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+    --radius-xl: 24px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-image:
+      radial-gradient(60% 40% at 20% 10%, oklch(95% 0.04 175) 0%, transparent 60%),
+      radial-gradient(50% 35% at 90% 90%, oklch(95% 0.05 75) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  .shell {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 56px 32px 96px;
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 64px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: -0.01em;
+  }
+  .brand-mark {
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, oklch(70% 0.13 178), oklch(64% 0.15 165));
+    display: grid; place-items: center;
+    color: white;
+    font-weight: 700;
+    font-size: 16px;
+    box-shadow: 0 2px 8px rgba(50, 120, 110, 0.25);
+  }
+  .top-meta {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .top-meta .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-variant-numeric: tabular-nums;
+  }
+  .top-meta .pill .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 0 3px var(--success-soft);
+  }
+
+  .hero {
+    margin-bottom: 56px;
+  }
+  .hero .eyebrow {
+    display: inline-block;
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin-bottom: 20px;
+  }
+  .hero h1 {
+    font-size: clamp(36px, 5vw, 52px);
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 16px;
+  }
+  .hero h1 .soft { color: var(--muted); font-weight: 500; }
+  .hero p {
+    max-width: 640px;
+    font-size: 17px;
+    color: var(--fg-soft);
+    line-height: 1.6;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+  @media (max-width: 880px) {
+    .grid { grid-template-columns: 1fr; }
+    .shell { padding: 32px 20px 64px; }
+    .top { margin-bottom: 36px; }
+  }
+
+  .entry {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    cursor: pointer;
+    position: relative;
+  }
+  .entry:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-hover);
+    border-color: var(--border-strong);
+  }
+  .entry .icon {
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    display: grid; place-items: center;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+  }
+  .entry.dark .icon { background: oklch(94% 0.04 250); color: oklch(38% 0.06 250); }
+  .entry.warm .icon { background: var(--warn-soft); color: oklch(42% 0.10 60); }
+  .entry h3 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-bottom: 6px;
+  }
+  .entry p {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .entry .meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--border);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .entry .meta strong {
+    color: var(--fg);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .entry .arrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent-ink);
+    font-weight: 500;
+  }
+
+  .footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .feature-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-top: 24px;
+  }
+  @media (max-width: 880px) {
+    .feature-row { grid-template-columns: repeat(2, 1fr); }
+  }
+  .feature {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--fg-soft);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .feature svg { flex-shrink: 0; color: var(--accent); }
+
+  /* small SVG icon helper */
+  .ico { width: 18px; height: 18px; }
+
+  .app-rail {
+    position: fixed;
+    z-index: 20;
+    top: 16px;
+    bottom: 16px;
+    left: 16px;
+    width: 64px;
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    background: color-mix(in oklch, var(--surface) 92%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    transition: width 0.2s ease;
+  }
+  .rail-brand {
+    width: 100%;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .rail-brand .brand-mark {
+    flex: 0 0 auto;
+  }
+  .rail-brand-name,
+  .rail-label {
+    display: none;
+  }
+  .rail-toggle {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+  }
+  .rail-toggle:hover,
+  .rail-toggle:focus-visible {
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    outline: none;
+  }
+  .rail-toggle svg {
+    width: 18px;
+    height: 18px;
+    transition: transform 0.2s ease;
+  }
+  .rail-nav,
+  .rail-footer {
+    width: 100%;
+    display: grid;
+    gap: 8px;
+  }
+  .rail-footer {
+    margin-top: auto;
+  }
+  .rail-item {
+    width: 42px;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 11px;
+    color: var(--muted);
+    border-radius: 12px;
+    transition: color 0.18s ease, background 0.18s ease;
+  }
+  .rail-item:hover,
+  .rail-item:focus-visible {
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    outline: none;
+  }
+  .rail-item.is-active {
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+  }
+  .rail-item svg {
+    flex: 0 0 auto;
+    width: 19px;
+    height: 19px;
+  }
+  .app-rail.is-expanded {
+    width: 218px;
+    align-items: stretch;
+  }
+  .app-rail.is-expanded .rail-brand {
+    justify-content: flex-start;
+    padding-left: 2px;
+  }
+  .app-rail.is-expanded .rail-brand-name,
+  .app-rail.is-expanded .rail-label {
+    display: block;
+  }
+  .app-rail.is-expanded .rail-brand-name {
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--fg);
+  }
+  .app-rail.is-expanded .rail-toggle {
+    width: 100%;
+  }
+  .app-rail.is-expanded .rail-toggle svg {
+    transform: rotate(180deg);
+  }
+  .app-rail.is-expanded .rail-item {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 0 12px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .shell {
+    margin-left: max(96px, calc((100vw - 1080px) / 2));
+    margin-right: 32px;
+  }
+  @media (max-width: 880px) {
+    .shell {
+      margin-left: 80px;
+      margin-right: 20px;
+    }
+  }
+  @media (max-width: 600px) {
+    .app-rail {
+      top: 12px;
+      bottom: 12px;
+      left: 12px;
+      width: 58px;
+      padding-left: 8px;
+      padding-right: 8px;
+      border-radius: 18px;
+    }
+    .shell {
+      margin-left: 78px;
+      margin-right: 10px;
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+    .app-rail.is-expanded {
+      width: min(218px, calc(100vw - 24px));
+    }
+  }
+</style>
+</head>
+<body>
+<aside class="app-rail" id="appRail">
+  <div class="rail-brand">
+    <div class="brand-mark">D</div>
+    <span class="rail-brand-name">DayPlan</span>
+  </div>
+  <button class="rail-toggle" id="railToggle" type="button" aria-label="展开侧栏" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+  </button>
+  <nav class="rail-nav" aria-label="主导航">
+    <a class="rail-item is-active" href="#overview" title="今日概述" aria-label="今日概述" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/><circle cx="12" cy="14" r="2.5"/></svg>
+      <span class="rail-label">今日概述</span>
+    </a>
+    <a class="rail-item" href="dashboard.html#tasks" title="任务管理" aria-label="任务管理">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span class="rail-label">任务管理</span>
+    </a>
+    <a class="rail-item" href="email.html" title="邮件配置" aria-label="邮件配置">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+      <span class="rail-label">邮件配置</span>
+    </a>
+  </nav>
+  <div class="rail-footer">
+    <a class="rail-item" href="#" title="帮助" aria-label="帮助">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.5 2.5 0 1 1 4.2 1.8c-1.1.8-1.8 1.2-1.8 2.7M12 17h.01"/></svg>
+      <span class="rail-label">帮助</span>
+    </a>
+  </div>
+</aside>
+<div class="shell" id="overview">
+
+  <div class="top">
+    <div class="brand">
+      <div class="brand-mark">D</div>
+      DayPlan
+    </div>
+    <div class="top-meta">
+      <span class="pill"><span class="dot"></span>已同步 · 1 分钟前</span>
+      <span>2026 年 7 月 16 日 · 周四</span>
+    </div>
+  </div>
+
+  <section class="hero">
+    <span class="eyebrow">个人任务管理 · 邮件提醒</span>
+    <h1>把今天要做的事<br/><span class="soft">整理清楚，再做其他。</span></h1>
+    <p>今日概述只展示今天该完成的事项，明天、下周、下个月的事默认折叠——专注当下，等时间到了再展开。任务管理支持增删改、状态、优先级和标签；邮件配置让你自己掌控每条提醒的发送方式。</p>
+
+    <div class="feature-row">
+      <div class="feature">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        时间分块折叠
+      </div>
+      <div class="feature">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        任务状态可勾选
+      </div>
+      <div class="feature">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>
+        标签 + 优先级
+      </div>
+      <div class="feature">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"/><path d="M4 6l8 7 8-7"/></svg>
+        SMTP 邮件提醒
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <a class="entry" href="dashboard.html">
+      <div class="icon">
+        <svg class="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/><circle cx="12" cy="14" r="2.5"/>
+        </svg>
+      </div>
+      <div>
+        <h3>今日概述</h3>
+        <p>今天该做的事展开排列，明天 / 后天 / 下周 / 下个月 / 所有时间折叠收起。</p>
+      </div>
+      <div class="meta">
+        <span><strong>4</strong> 项今天 · <strong>2</strong> 已完成</span>
+        <span class="arrow">进入 →</span>
+      </div>
+    </a>
+
+    <a class="entry dark" href="dashboard.html#tasks">
+      <div class="icon">
+        <svg class="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+        </svg>
+      </div>
+      <div>
+        <h3>任务管理</h3>
+        <p>增删改查、状态切换、按时间范围筛选、按优先级和标签过滤。</p>
+      </div>
+      <div class="meta">
+        <span><strong>23</strong> 项总任务 · <strong>7</strong> 进行中</span>
+        <span class="arrow">进入 →</span>
+      </div>
+    </a>
+
+    <a class="entry warm" href="email.html">
+      <div class="icon">
+        <svg class="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>
+        </svg>
+      </div>
+      <div>
+        <h3>邮件配置</h3>
+        <p>SMTP 服务器、认证、发件人、按事件触发提醒规则，支持测试发送。</p>
+      </div>
+      <div class="meta">
+        <span><strong>QQ 企业邮</strong> · 已启用</span>
+        <span class="arrow">进入 →</span>
+      </div>
+    </a>
+  </section>
+
+  <div class="footer">
+    <span>DayPlan · 桌面 Web 原型</span>
+    <span>v0.1 · 单用户本地存储</span>
+  </div>
+</div>
+
+<style>
+/* smooth focus rings for keyboard nav */
+.entry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+</style>
+<script>
+  (function () {
+    var rail = document.getElementById('appRail');
+    var toggle = document.getElementById('railToggle');
+    if (!rail || !toggle) return;
+    toggle.addEventListener('click', function () {
+      var expanded = rail.classList.toggle('is-expanded');
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.setAttribute('aria-label', expanded ? '收起侧栏' : '展开侧栏');
+    });
+  })();
+</script>
+</body>
+</html>
