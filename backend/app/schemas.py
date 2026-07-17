@@ -2,6 +2,8 @@
 from datetime import date as _date
 from typing import Literal, Optional
 
+import re
+
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
@@ -264,3 +266,99 @@ class DashboardTodayResponse(BaseModel):
 
 
 # ========== 今日概述 模块结束 ==========
+
+
+# ========== 邮箱配置（Email Config）模式 ==========
+
+# 简单邮箱格式校验正则：足够满足 spec 中「邮箱格式非法 → 400」要求，
+# 避免引入 pydantic.EmailStr 强依赖的 email-validator 包。
+_EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+
+def _validate_email(value: Optional[str], field_name: str) -> Optional[str]:
+    """邮箱格式校验：非空时必须符合 user@domain.tld 形式；空值放行。"""
+    if value is None or value == "":
+        return value
+    if not isinstance(value, str) or not _EMAIL_PATTERN.match(value):
+        raise ValueError(f"{field_name} must be a valid email address")
+    return value
+
+
+class EmailConfigWrite(BaseModel):
+    """邮箱配置写入请求体：用于 PUT /api/email-config 的单行 upsert。
+
+    - smtp_password 留空字符串或 None 视为「保留旧值」，由路由层处理；
+    - 字段校验失败时 Pydantic 默认抛 422，由路由层映射为 400 满足 spec 错误约定。
+    """
+
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: Optional[str] = None
+    use_tls: bool = True
+    sender_email: str
+    sender_name: str
+    recipient_email: str
+    recipient_name: Optional[str] = None
+
+    @field_validator("smtp_host")
+    @classmethod
+    def _check_smtp_host(cls, value: str) -> str:
+        if not (1 <= len(value) <= 128):
+            raise ValueError("smtp_host length must be 1-128")
+        return value
+
+    @field_validator("smtp_port")
+    @classmethod
+    def _check_smtp_port(cls, value: int) -> int:
+        if not (1 <= value <= 65535):
+            raise ValueError("smtp_port must be in 1-65535")
+        return value
+
+    @field_validator("smtp_user")
+    @classmethod
+    def _check_smtp_user(cls, value: str) -> str:
+        if not (1 <= len(value) <= 128):
+            raise ValueError("smtp_user length must be 1-128")
+        return value
+
+    @field_validator("sender_email")
+    @classmethod
+    def _check_sender_email(cls, value: str) -> str:
+        return _validate_email(value, "sender_email")
+
+    @field_validator("recipient_email")
+    @classmethod
+    def _check_recipient_email(cls, value: str) -> str:
+        return _validate_email(value, "recipient_email")
+
+    @field_validator("sender_name")
+    @classmethod
+    def _check_sender_name(cls, value: str) -> str:
+        if not (1 <= len(value) <= 64):
+            raise ValueError("sender_name length must be 1-64")
+        return value
+
+
+class EmailConfigRead(BaseModel):
+    """邮箱配置响应体：未配置时 exists=false 且所有字段为 None / False。
+
+    注意：响应**永远不回 smtp_password 明文**，用 smtp_password_set: bool 替代。
+    """
+
+    exists: bool
+    id: Optional[int] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password_set: bool = False
+    use_tls: bool = False
+    sender_email: Optional[str] = None
+    sender_name: Optional[str] = None
+    recipient_email: Optional[str] = None
+    recipient_name: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+# ========== 邮箱配置 模块结束 ==========

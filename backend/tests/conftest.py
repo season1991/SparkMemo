@@ -66,11 +66,11 @@ def db():
     # SQLite 与 MySQL 关闭外键的语法不同；Dialect 分支处理
     if engine.dialect.name == "sqlite":
         # 顺序按子表优先
-        for table_name in ("tasks", "projects", "task_types", "companies"):
+        for table_name in ("tasks", "projects", "task_types", "companies", "email_config"):
             session.execute(text(f"DELETE FROM {table_name}"))
     else:
         session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
-        for table_name in ("tasks", "projects", "task_types", "companies"):
+        for table_name in ("tasks", "projects", "task_types", "companies", "email_config"):
             session.execute(text(f"DELETE FROM {table_name}"))
         session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     session.commit()

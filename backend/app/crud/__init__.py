@@ -1,3 +1,3 @@
-from app.crud import company, dashboard, project, task, task_type
+from app.crud import company, dashboard, email_config, project, task, task_type
 
-__all__ = ["company", "dashboard", "project", "task", "task_type"]
+__all__ = ["company", "dashboard", "email_config", "project", "task", "task_type"]

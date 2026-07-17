@@ -1,0 +1,288 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SparkMemo",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/email-config": {
+      "get": {
+        "tags": [
+          "email-config"
+        ],
+        "summary": "Get Email Config Endpoint",
+        "description": "取当前邮箱配置；未配置返回 exists=false + 所有字段 null/false。",
+        "operationId": "get_email_config_endpoint_api_email_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailConfigRead"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "email-config"
+        ],
+        "summary": "Upsert Email Config Endpoint",
+        "description": "upsert 单行配置。\n\n- smtp_password 留空字符串或 None 视为「保留旧值」；\n- 字段校验失败由 app 级 RequestValidationError 处理器映射为 400（见 main.py）。",
+        "operationId": "upsert_email_config_endpoint_api_email_config_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailConfigWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailConfigRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EmailConfigRead": {
+        "properties": {
+          "exists": {
+            "type": "boolean",
+            "title": "Exists"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "smtp_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Host"
+          },
+          "smtp_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Port"
+          },
+          "smtp_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp User"
+          },
+          "smtp_password_set": {
+            "type": "boolean",
+            "title": "Smtp Password Set",
+            "default": false
+          },
+          "use_tls": {
+            "type": "boolean",
+            "title": "Use Tls",
+            "default": false
+          },
+          "sender_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Email"
+          },
+          "sender_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Name"
+          },
+          "recipient_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient Email"
+          },
+          "recipient_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient Name"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "exists"
+        ],
+        "title": "EmailConfigRead",
+        "description": "邮箱配置响应体：未配置时 exists=false 且所有字段为 None / False。\n\n注意：响应**永远不回 smtp_password 明文**，用 smtp_password_set: bool 替代。"
+      },
+      "EmailConfigWrite": {
+        "properties": {
+          "smtp_host": {
+            "type": "string",
+            "title": "Smtp Host"
+          },
+          "smtp_port": {
+            "type": "integer",
+            "title": "Smtp Port"
+          },
+          "smtp_user": {
+            "type": "string",
+            "title": "Smtp User"
+          },
+          "smtp_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Password"
+          },
+          "use_tls": {
+            "type": "boolean",
+            "title": "Use Tls",
+            "default": true
+          },
+          "sender_email": {
+            "type": "string",
+            "title": "Sender Email"
+          },
+          "sender_name": {
+            "type": "string",
+            "title": "Sender Name"
+          },
+          "recipient_email": {
+            "type": "string",
+            "title": "Recipient Email"
+          },
+          "recipient_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipient Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "smtp_host",
+          "smtp_port",
+          "smtp_user",
+          "sender_email",
+          "sender_name",
+          "recipient_email"
+        ],
+        "title": "EmailConfigWrite",
+        "description": "邮箱配置写入请求体：用于 PUT /api/email-config 的单行 upsert。\n\n- smtp_password 留空字符串或 None 视为「保留旧值」，由路由层处理；\n- 字段校验失败时 Pydantic 默认抛 422，由路由层映射为 400 满足 spec 错误约定。"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      }
+    }
+  }
+}

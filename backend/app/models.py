@@ -2,7 +2,7 @@
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -87,3 +87,28 @@ class Task(Base):
     company: Mapped["Company"] = relationship(back_populates="tasks")
     project: Mapped["Project"] = relationship(back_populates="tasks")
     task_type: Mapped[Optional["TaskType"]] = relationship(back_populates="tasks")
+
+
+class EmailConfig(Base):
+    """邮箱配置表（单行表）。
+
+    应用层固定以 id=1 读写；本表仅承担「SMTP 凭证 + 发件人 + 收件人」的存储职责，
+    不含任何调度 / 启用开关字段（与 spec/email_notification.md 对齐）。
+    """
+
+    __tablename__ = "email_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    smtp_host: Mapped[str] = mapped_column(String(128), nullable=False)
+    smtp_port: Mapped[int] = mapped_column(Integer, nullable=False)
+    smtp_user: Mapped[str] = mapped_column(String(128), nullable=False)
+    smtp_password: Mapped[str] = mapped_column(String(256), nullable=False)
+    use_tls: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sender_email: Mapped[str] = mapped_column(String(128), nullable=False)
+    sender_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(128), nullable=False)
+    recipient_name: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[str] = mapped_column(String(10), default=_today_str, nullable=False)
+    updated_at: Mapped[str] = mapped_column(
+        String(10), default=_today_str, onupdate=_today_str, nullable=False
+    )
