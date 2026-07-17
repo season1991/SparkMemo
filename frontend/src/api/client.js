@@ -51,7 +51,12 @@ function humanizeError(status, detail) {
     }
     return '请求参数有误，请检查后重试'
   }
-  if (status >= 500) return '服务异常，请稍后重试'
+  if (status >= 500) {
+    // 5xx 时若后端带了 detail 字符串（如 /api/email/send-test 的 MailerError），
+    // 透传给前端用户，便于定位 SMTP 连接 / 认证 / 超时等具体原因；
+    // 否则保持通用文案。
+    return typeof detail === 'string' && detail ? detail : '服务异常，请稍后重试'
+  }
   return '请求失败'
 }
 

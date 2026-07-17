@@ -3,15 +3,19 @@
  * 邮箱配置主页（路由 /email-config）。
  *
  * 数据来源：GET /api/email-config；详见 OpenAPI EmailConfigRead。
- * 提交接口：PUT /api/email-config（单行 upsert；smtp_password 留空 = 保留旧值）。
+ * 提交接口：
+ *   - PUT /api/email-config（单行 upsert；smtp_password 留空 = 保留旧值；send_time / active 每次显式覆盖）。
+ *   - POST /api/email/send-test（连通性测试；不受 active 开关约束；后端自动 upsert）。
  * 加载策略：onMounted 触发 store.fetch()。
  * 三态：加载中（首屏骨架）/ 加载失败（无旧数据 error 卡片）/ 正常表单。
  * 密码框 placeholder 三态：未配置 / 已设置留空保留 / 已设置可改 → 由 store.passwordIsSet 控制。
+ * 按钮互斥：saving / testing / loading 互斥（详见 spec §2.8 按钮状态表）。
  *
  * 全局规则遵循 frontend/spec/README.md；本文档聚焦本模块特有的交互与展示。
  */
 import { onMounted, ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { ApiError, showApiError } from '../api/client.js'
 import { useEmailConfigStore } from '../stores/useEmailConfigStore.js'
 
 const store = useEmailConfigStore()
@@ -22,6 +26,9 @@ const TLS_PRESETS = [
   { port: 587, use_tls: true,  label: 'STARTTLS (587)' },
   { port: 25,  use_tls: false, label: '无加密 (25)' }
 ]
+
+// 24h HH:MM 正则：与后端 Pydantic _validate_send_time 完全一致
+const SEND_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
 
 // 表单本地状态（不直接绑定到 store.config，方便用户自由编辑）
 const formRef = ref(null)
@@ -34,7 +41,9 @@ const form = reactive({
   sender_email: '',
   sender_name: '',
   recipient_email: '',
-  recipient_name: ''
+  recipient_name: '',
+  send_time: '08:00',
+  active: false
 })
 
 // ========== 三态派生 ==========
@@ -91,6 +100,18 @@ function validateOptionalName(_, value, callback) {
   callback()
 }
 
+function validateSendTime(_, value, callback) {
+  if (!value) {
+    callback(new Error('请选择每日发送时间'))
+    return
+  }
+  if (!SEND_TIME_PATTERN.test(value)) {
+    callback(new Error('请输入 24h HH:MM（如 08:30）'))
+    return
+  }
+  callback()
+}
+
 const rules = {
   smtp_host: [
     { required: true, message: '请输入 SMTP 服务器', trigger: 'blur' },
@@ -118,6 +139,13 @@ const rules = {
   ],
   recipient_name: [
     { validator: validateOptionalName, trigger: 'blur' }
+  ],
+  send_time: [
+    { required: true, validator: validateSendTime, trigger: 'change' },
+    { validator: validateSendTime, trigger: 'blur' }
+  ],
+  active: [
+    { type: 'boolean', required: true, message: '请设置启用开关', trigger: 'change' }
   ]
 }
 
@@ -140,6 +168,8 @@ function hydrateForm() {
   form.sender_name = store.config.sender_name || ''
   form.recipient_email = store.config.recipient_email || ''
   form.recipient_name = store.config.recipient_name || ''
+  form.send_time = store.config.send_time || '08:00'
+  form.active = !!store.config.active
 }
 
 // 监听 store.config 变化（GET 成功后 / save 成功后由 store 替换 config）→ 灌入表单
@@ -161,6 +191,22 @@ onMounted(async () => {
 })
 
 // ========== 操作 ==========
+function buildPayload() {
+  return {
+    smtp_host: form.smtp_host.trim(),
+    smtp_port: Number(form.smtp_port),
+    smtp_user: form.smtp_user.trim(),
+    smtp_password: form.smtp_password === '' ? null : form.smtp_password,
+    use_tls: !!form.use_tls,
+    sender_email: form.sender_email.trim(),
+    sender_name: form.sender_name.trim(),
+    recipient_email: form.recipient_email.trim(),
+    recipient_name: form.recipient_name === '' ? null : form.recipient_name.trim(),
+    send_time: form.send_time,
+    active: !!form.active
+  }
+}
+
 async function onSubmit() {
   if (!formRef.value) return
   try {
@@ -170,25 +216,49 @@ async function onSubmit() {
     return
   }
 
-  // 组装 payload：snake_case + 空字符串转 null
-  const payload = {
-    smtp_host: form.smtp_host.trim(),
-    smtp_port: Number(form.smtp_port),
-    smtp_user: form.smtp_user.trim(),
-    smtp_password: form.smtp_password === '' ? null : form.smtp_password,
-    use_tls: !!form.use_tls,
-    sender_email: form.sender_email.trim(),
-    sender_name: form.sender_name.trim(),
-    recipient_email: form.recipient_email.trim(),
-    recipient_name: form.recipient_name === '' ? null : form.recipient_name.trim()
-  }
-
-  const result = await store.save(payload)
+  const result = await store.save(buildPayload())
   if (result.ok) {
     ElMessage.success('保存成功')
     // 清空密码框（语义：用户提交的新密码已落库；下次 GET 之前 placeholder 由 store.passwordIsSet 决定）
     form.smtp_password = ''
     formRef.value?.clearValidate()
+  } else {
+    const err = result.error
+    if (err instanceof ApiError) {
+      if (err.status === 422) {
+        // 422：字段红字由 el-form rules 校验已捕获；此处仅聚合 toast
+        ElMessage.error(err.message)
+      } else {
+        showApiError(err)
+      }
+    } else {
+      showApiError(err)
+    }
+  }
+}
+
+async function onSendTest() {
+  if (!formRef.value) return
+  try {
+    await formRef.value.validate()
+  } catch {
+    return
+  }
+
+  const result = await store.sendTest(buildPayload())
+  if (result.ok) {
+    const recipient = result.response?.recipient || form.recipient_email
+    ElMessage.success(`已发送测试邮件至 ${recipient}`)
+    form.smtp_password = ''
+    formRef.value?.clearValidate()
+  } else {
+    const err = result.error
+    if (err instanceof ApiError && err.status === 422) {
+      // 422 字段红字由 el-form 触发；聚合 toast
+      ElMessage.error(err.message)
+    } else {
+      showApiError(err)
+    }
   }
 }
 
@@ -207,7 +277,7 @@ async function onRetry() {
   <div class="email-config-view">
     <!-- 首屏加载：骨架 -->
     <el-card v-if="isFirstLoad" shadow="never" class="loading-card">
-      <el-skeleton :rows="9" animated />
+      <el-skeleton :rows="11" animated />
     </el-card>
 
     <!-- 加载失败（无旧数据） -->
@@ -282,12 +352,39 @@ async function onRetry() {
             <el-input v-model="form.recipient_name" placeholder="如 我自己" />
           </el-form-item>
 
-          <div class="form-actions">
-            <el-button :disabled="store.saving" @click="onReset">重置</el-button>
+          <el-divider>定时调度</el-divider>
+
+          <el-form-item label="每日发送时间" prop="send_time">
+            <el-time-picker
+              v-model="form.send_time"
+              format="HH:mm"
+              value-format="HH:mm"
+              placeholder="例如 08:00"
+              style="width: 240px"
+            />
+            <span class="hint">24h HH:MM；仅在「启用定时发送」打开后由后端调度器按此时点每日触发。</span>
+          </el-form-item>
+
+          <el-form-item label="启用定时发送" prop="active">
+            <el-switch
+              v-model="form.active"
+              active-text="启用"
+              inactive-text="停用"
+            />
+            <span class="hint">关闭后调度器 Job 暂停；「测试发送」不受此开关约束。</span>
+          </el-form-item>
+
+          <div class="form-actions form-actions--split">
+            <el-button :disabled="store.saving || store.testing" @click="onReset">重置</el-button>
+            <el-button
+              :loading="store.testing"
+              :disabled="store.testing || store.saving"
+              @click="onSendTest"
+            >测试发送</el-button>
             <el-button
               type="primary"
               :loading="store.saving"
-              :disabled="store.saving"
+              :disabled="store.saving || store.testing"
               @click="onSubmit"
             >保存配置</el-button>
           </div>
