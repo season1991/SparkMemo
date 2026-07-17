@@ -114,3 +114,67 @@ class EmailConfig(Base):
     updated_at: Mapped[str] = mapped_column(
         String(10), default=_today_str, onupdate=_today_str, nullable=False
     )
+
+
+# ========== DSP 上传模块（v0.5）==========
+
+
+class DspUpload(Base):
+    """DSP 周预测 Excel 批次元数据表。
+
+    联合唯一 (vendor, item, sub_item, version_date) 阻断同版本重传；
+    删除时由 SQLAlchemy 级联清空 dsp_upload_rows。
+    """
+
+    __tablename__ = "dsp_uploads"
+    __table_args__ = (
+        UniqueConstraint(
+            "vendor",
+            "item",
+            "sub_item",
+            "version_date",
+            name="uk_dsp_upload_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    vendor: Mapped[str] = mapped_column(String(64), nullable=False)
+    item: Mapped[str] = mapped_column(String(128), nullable=False)
+    sub_item: Mapped[str] = mapped_column(String(128), nullable=False)
+    version_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    source_filename: Mapped[str] = mapped_column(String(256), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(10), default=_today_str, nullable=False)
+
+    rows: Mapped[list["DspUploadRow"]] = relationship(
+        back_populates="upload",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class DspUploadRow(Base):
+    """DSP 周预测事实行表：每条记录 = (数据行 × 有效周列) 的展开。"""
+
+    __tablename__ = "dsp_upload_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    upload_id: Mapped[int] = mapped_column(
+        ForeignKey("dsp_uploads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    country: Mapped[Optional[str]] = mapped_column(String(64))
+    category: Mapped[Optional[str]] = mapped_column(String(128))
+    config_code: Mapped[Optional[str]] = mapped_column(String(128))
+    data_type: Mapped[Optional[str]] = mapped_column(String(64))
+    ttl: Mapped[Optional[int]] = mapped_column(Integer)
+    ym: Mapped[str] = mapped_column("ym", String(7), nullable=False)
+    week: Mapped[str] = mapped_column(String(8), nullable=False)
+    date: Mapped[str] = mapped_column(String(10), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    upload: Mapped["DspUpload"] = relationship(back_populates="rows")
+
+
+# ========== DSP 上传模块结束 ==========

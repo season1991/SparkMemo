@@ -6,7 +6,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import companies, dashboard, email_config, email_send, projects, task_types, tasks
+from app.api import companies, dashboard, dsp_uploads, email_config, email_send, projects, task_types, tasks
 from app.services.scheduler import apscheduler_instance, sync_email_dispatch_job
 
 
@@ -104,3 +104,4 @@ app.include_router(tasks.router)
 app.include_router(dashboard.router)
 app.include_router(email_config.router)
 app.include_router(email_send.router)
+app.include_router(dsp_uploads.router)

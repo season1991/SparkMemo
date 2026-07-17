@@ -383,3 +383,59 @@ class EmailConfigRead(BaseModel):
 
 
 # ========== 邮箱配置 模块结束 ==========
+
+
+# ========== DSP 上传（v0.5）模式 ==========
+
+
+class DspUploadRead(BaseModel):
+    """DSP 批次响应体。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    vendor: str
+    item: str
+    sub_item: str
+    version_date: str
+    source_filename: str
+    row_count: int
+    created_at: str
+
+
+class DspUploadListResponse(BaseModel):
+    """DSP 批次列表分页响应。"""
+
+    items: list[DspUploadRead]
+    total: int
+    page: int
+    size: int
+
+
+class DspUploadRowRead(BaseModel):
+    """DSP 事实行响应体。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    country: Optional[str] = None
+    category: Optional[str] = None
+    config_code: Optional[str] = None
+    data_type: Optional[str] = None
+    ttl: Optional[int] = None
+    ym: str
+    week: str
+    date: str
+    quantity: int
+
+
+class DspUploadRowListResponse(BaseModel):
+    """DSP 事实行分页响应。"""
+
+    items: list[DspUploadRowRead]
+    total: int
+    page: int
+    size: int
+
+
+# ========== DSP 上传 模块结束 ==========

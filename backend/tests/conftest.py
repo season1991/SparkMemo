@@ -98,11 +98,11 @@ def db():
     # SQLite 与 MySQL 关闭外键的语法不同；Dialect 分支处理
     if engine.dialect.name == "sqlite":
         # 顺序按子表优先
-        for table_name in ("tasks", "projects", "task_types", "companies", "email_config"):
+        for table_name in ("dsp_upload_rows", "dsp_uploads", "tasks", "projects", "task_types", "companies", "email_config"):
             session.execute(text(f"DELETE FROM {table_name}"))
     else:
         session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
-        for table_name in ("tasks", "projects", "task_types", "companies", "email_config"):
+        for table_name in ("dsp_upload_rows", "dsp_uploads", "tasks", "projects", "task_types", "companies", "email_config"):
             session.execute(text(f"DELETE FROM {table_name}"))
         session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     session.commit()
@@ -266,5 +266,48 @@ def make_email_config():
         db.commit()
         db.refresh(row)
         return row
+
+    return factory
+
+
+@pytest.fixture
+def make_dsp_upload():
+    """创建 dsp_uploads + 可选事实行；用于 list / get / rows / delete 的端点测试。"""
+    from datetime import date
+
+    def factory(
+        db,
+        *,
+        vendor="Arista",
+        item="网络设备DSP横版",
+        sub_item="机箱",
+        version_date="2026-07-15",
+        source_filename="Arista-网络设备DSP横版-机箱-061626.xlsx",
+        row_count=0,
+        created_at=None,
+        fact_rows=None,
+    ):
+        if created_at is None:
+            created_at = date.today().isoformat()
+        upload = models.DspUpload(
+            vendor=vendor,
+            item=item,
+            sub_item=sub_item,
+            version_date=version_date,
+            source_filename=source_filename,
+            row_count=row_count,
+            created_at=created_at,
+        )
+        db.add(upload)
+        db.commit()
+        db.refresh(upload)
+        if fact_rows:
+            db.add_all([models.DspUploadRow(upload_id=upload.id, **fr) for fr in fact_rows])
+            db.commit()
+            if row_count == 0:
+                upload.row_count = len(fact_rows)
+                db.commit()
+                db.refresh(upload)
+        return upload
 
     return factory

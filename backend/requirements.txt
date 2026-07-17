@@ -8,3 +8,4 @@ pydantic>=2.0
 pydantic-settings
 python-dotenv
 python-multipart
+openpyxl>=3.1

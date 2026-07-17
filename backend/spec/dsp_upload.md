@@ -12,7 +12,7 @@
 
 1. **文件上传**：用户在前端选择一个 `.xlsx` 文件 + 一个 `version_date`（YYYY-MM-DD），后端接收 multipart 上传；
 2. **文件名解析**：截掉扩展名后按 `-` 切分，**前 3 段**作为 `vendor` / `item` / `sub_item`，第 4 段及之后丢弃；
-3. **Excel 解析**：单 sheet（sheet 名固定 `DSP`）；按 **固定列号** 读取静态字段（`Country` 在 col 4、`Category` 在 col 5、`Config Code` 在 col 6、`Data Type` 在 col 10、`TTL` 在 col 11、`Update By` 在 col 12），col 13+ 为周列；第 1 行列头在 col 13+ 携带 `year_month` 段标签，第 2 行周编号，第 3 行周起始日，从第 4 行起为数据行；
+3. **Excel 解析**：单 sheet（sheet 名固定 `DSP`）；按 **固定列号** 读取静态字段（`Country` 在 col 4、`Category` 在 col 5、`Config Code` 在 col 6、`Data Type` 在 col 10、`TTL` 在 col 11、`Update By` 在 col 12），col 13+ 为周列；第 1 行列头在 col 13+ 携带 `ym` 段标签，第 2 行周编号，第 3 行周起始日，从第 4 行起为数据行；
 4. **数据展开**：每条数据行 × 每个有效周列 = 一条事实记录入库；`quantity` 为空 / None / `0` / 非 `Demand`-`Supply` 行 全部跳过（详见 §跳过规则）；
 5. **元数据存档**：批次级字段 `vendor` / `item` / `sub_item` / `version_date` / `source_filename` 入 `dsp_uploads` 表；
 6. **重传阻断**：同 `(vendor, item, sub_item, version_date)` 已存在 → 409，强制用户先删旧批次；
@@ -27,11 +27,11 @@
 | 表 | 状态 | 字段 |
 |----|------|------|
 | `dsp_uploads` | 新增 | id / vendor / item / sub_item / version_date / source_filename / row_count / created_at；(vendor, item, sub_item, version_date) 联合唯一 |
-| `dsp_upload_rows` | 新增 | id / upload_id(FK, ON DELETE CASCADE) / country / category / config_code / data_type / ttl / year_month / week / date / quantity |
+| `dsp_upload_rows` | 新增 | id / upload_id(FK, ON DELETE CASCADE) / country / category / config_code / data_type / ttl / ym / week / date / quantity |
 
 > **日期字段统一为 `YYYY-MM-DD` 字符串**：`version_date` / `date` / `created_at` 均为 10 字符定长字符串，不使用数据库原生 `DATE` / `DATETIME` 类型，便于跨数据库移植。
 >
-> **`year_month` 用 7 字符字符串**（如 `2025-01`）；`week` 用 8 字符字符串（如 `WK01`），与 Excel 原文件格式保持一致便于审计。
+> **`ym` 用 7 字符字符串**（如 `2025-01`）；`week` 用 8 字符字符串（如 `WK01`），与 Excel 原文件格式保持一致便于审计。
 
 ### `dsp_uploads` 字段
 
@@ -63,7 +63,7 @@ category     Mapped[str|None]  # 128；来源 col 5（strip）
 config_code  Mapped[str|None]  # 128；来源 col 6（strip）
 data_type    Mapped[str|None]  # 64；来源 col 10（strip），仅 `Demand`/`Supply` 入库
 ttl          Mapped[int|None]  # 来源 col 11（int；非整数字符串视为空）
-year_month   Mapped[str]    # 7，"2025-01"，非空
+ym            Mapped[str]    # 7，"2025-01"，非空
 week         Mapped[str]    # 8，"WK01"，非空
 date         Mapped[str]    # 10，YYYY-MM-DD，非空
 quantity     Mapped[int]    # 非负，非空
@@ -116,7 +116,7 @@ def parse_filename(filename: str) -> tuple[str, str, str]:
 | **10** | **J** | `Data Type`          | 静态 | `data_type`（过滤） |
 | **11** | **K** | `TTL`                | 静态 | `ttl` |
 | **12** | **L** | `Update By`          | 边界标记 | —（不存，仅用于划定 col 13+ 起点） |
-| **13+** | M+  | `2025-01` / 空 / `2025-02` / … | 周列 | `year_month` (行 1) / `week` (行 2) / `date` (行 3) / `quantity` (行 4+) |
+| **13+** | M+  | `2025-01` / 空 / `2025-02` / … | 周列 | `ym` (行 1) / `week` (行 2) / `date` (行 3) / `quantity` (行 4+) |
 
 > **明确丢弃 6 列**：`BU` / `Version` / `Region` / `Config Name` / `Model` / `Manufacturer`。`Update By` **不**在丢弃之列——它位于 col 12，充当静态列与周列之间的固定分界（解析时不读其内容，也不入库）。
 >
@@ -126,12 +126,12 @@ def parse_filename(filename: str) -> tuple[str, str, str]:
 
 | 行 | 用途 | 关键列 |
 |----|------|--------|
-| 1  | 列头 + `year_month` 段标签 | col 4..12 表头；col 13+ 携带 `year_month`（稀疏） |
+| 1  | 列头 + `ym` 段标签 | col 4..12 表头；col 13+ 携带 `ym`（稀疏） |
 | 2  | 周编号 `WK01` / `WK02` / … | col 13..max_col |
 | 3  | 周起始日 `YYYY-MM-DD` | col 13..max_col |
 | 4..max_row | 数据行 | col 4, 5, 6, 10, 11（静态）；col 13+（`quantity`） |
 
-### `year_month` 前向传播算法（行 1 col 13+）
+### `ym` 前向传播算法（行 1 col 13+）
 
 行 1 在 col 13+ 的单元格里**只**在月份分界处写值，其余列为空。一个示例节选（来自样本文件）：
 
@@ -145,17 +145,17 @@ row3: '2024-12-30' '2025-01-06' … '2025-02-03' …
 **算法**：
 
 ```python
-year_month_at_col: dict[int, str] = {}   # col -> "YYYY-MM"
+ym_at_col: dict[int, str] = {}   # col -> "YYYY-MM"
 current = ""
 for c in range(13, ws.max_column + 1):
     v = ws.cell(row=1, column=c).value
     if v is not None and str(v).strip() != "":
         current = str(v).strip()
     if current != "":
-        year_month_at_col[c] = current
+        ym_at_col[c] = current
 ```
 
-对 col 13..max_col 中所有同时满足"行 2 周编号非空 ∧ 行 3 周起始日非空"的列（即有效周列），其 `year_month` 取 `year_month_at_col[c]`；若该 col 没有 `year_month`（即遇到 col 13 之前所有行 1 cell 都为空、且 col 13 本身也为空），该列无效，整列跳过。
+对 col 13..max_col 中所有同时满足"行 2 周编号非空 ∧ 行 3 周起始日非空"的列（即有效周列），其 `ym` 取 `ym_at_col[c]`；若该 col 没有 `ym`（即遇到 col 13 之前所有行 1 cell 都为空、且 col 13 本身也为空），该列无效，整列跳过。
 
 ### 跳过规则（命中即跳过；分两层）
 
@@ -169,7 +169,7 @@ for c in range(13, ws.max_column + 1):
 
 - **C1**：该周列 col `c` 的 row 2 `week` 为空 / None；
 - **C2**：该周列 col `c` 的 row 3 `date` 为空 / None；
-- **C3**：该周列 col `c` 在 `year_month_at_col` 中查不到 `year_month`（即 col 13 起 row 1 全空的情况，正常文件不会出现）；
+- **C3**：该周列 col `c` 在 `ym_at_col` 中查不到 `ym`（即 col 13 起 row 1 全空的情况，正常文件不会出现）；
 - **C4**：该 cell 的 `quantity` 为空字符串 / None / `0`（数值 `0` 也跳；详见 §数值容错）。
 
 **注**：C1/C2/C3 整列跳过意味着该 (行 × 列) 组合不入库；该列对**其它**数据行仍然有效（其它行 × 该列 仍正常处理）。
@@ -198,11 +198,11 @@ for c in range(13, ws.max_column + 1):
 ### 展开公式
 
 - 数据行集合 = `{r | r ∈ [4, ws.max_row] ∧ row r 通过 R1 ∧ row r 通过 R2}`，记为 `N` 行；
-- 有效周列集合 = `{c | c ∈ [13, ws.max_column] ∧ row 2[c] 非空 ∧ row 3[c] 非空 ∧ year_month_at_col[c] 存在}`，记为 `M` 列；
+- 有效周列集合 = `{c | c ∈ [13, ws.max_column] ∧ row 2[c] 非空 ∧ row 3[c] 非空 ∧ ym_at_col[c] 存在}`，记为 `M` 列；
 - 事实行集合 = `{ (r, c) | r ∈ 数据行 ∧ c ∈ 有效周列 ∧ row r 的 col c 通过 C4 }`；
 - `row_count` = `len(事实行集合)`。
 
-每条事实行入库 `(upload_id, country, category, config_code, data_type, ttl, year_month_at_col[c], row 2[c] strip 后, row 3[c] strip 后, int(quantity))`。
+每条事实行入库 `(upload_id, country, category, config_code, data_type, ttl, ym_at_col[c], row 2[c] strip 后, row 3[c] strip 后, int(quantity))`。
 
 ---
 
@@ -277,7 +277,7 @@ for c in range(13, ws.max_column + 1):
       "config_code": "BD3300006913",
       "data_type": "Demand",
       "ttl": 4,
-      "year_month": "2025-01",
+      "ym": "2025-01",
       "week": "WK01",
       "date": "2024-12-30",
       "quantity": 4
@@ -328,7 +328,7 @@ for c in range(13, ws.max_column + 1):
 - 空字符串 → ValueError。
 
 ### 2. Excel 解析（纯函数）
-- 手工构造 4 行 × N 列 worksheet：row 1 含若干 `year_month` 标签（中间允许空洞）+ col 4..12 表头文字；row 2 周编号；row 3 周日期；row 4+ 数据；
+- 手工构造 4 行 × N 列 worksheet：row 1 含若干 `ym` 标签（中间允许空洞）+ col 4..12 表头文字；row 2 周编号；row 3 周日期；row 4+ 数据；
 - 断言展开行数符合预期（按 §展开公式）；
 - 跳过规则：
   - R1：`Country` 与 `Config Code` 同时空 → 该行无事实记录；
@@ -370,7 +370,7 @@ for c in range(13, ws.max_column + 1):
 - 用 `backend/tests/fixtures/Arista-网络设备DSP横版-机箱-061626.xlsx` 跑一次完整 POST，断言：
   - `row_count` = 164（= `Demand`/`Supply` 各 82 行 × 1 周列，或具体数 = 681 中 164 行 × 有效周列数 - 0 数减项）；
   - 事实行 `data_type` ∈ {`Demand`, `Supply`}；
-  - 任取一行抽查：`(country, category, config_code, data_type, ttl, year_month, week, date, quantity)` 与 Excel 原值一致。
+  - 任取一行抽查：`(country, category, config_code, data_type, ttl, ym, week, date, quantity)` 与 Excel 原值一致。
 
 ---
 
@@ -399,7 +399,7 @@ for c in range(13, ws.max_column + 1):
 | Summary §3 | 列头定位表述模糊，混用"列名匹配"和"列号" | 改为**纯列号**定位，明确"表头文本不参与解析" |
 | Key Changes / 模型 | `data_type` 可为 `GR`（与 R2 自相矛盾） | 明确仅 `Demand` / `Supply` 入库；示例 JSON 同步修正 |
 | 工作表结构 | "col 4, 5, 6, 10, 11, 12" 与"丢弃 7 列（含 Update By）"互斥 | 明确丢弃 6 列（BU/Version/Region/Config Name/Model/Manufacturer），Update By 不丢——它是 col 12 的边界标记，解析时不读不存 |
-| Excel 解析 / year_month | "col 13+ 第一个非空字符串视为 year_month 段起点"含糊 | 给出**完整前向传播算法** + 伪代码 + 样本片段 |
+| Excel 解析 / ym | "col 13+ 第一个非空字符串视为 ym 段起点"含糊 | 给出**完整前向传播算法** + 伪代码 + 样本片段 |
 | 跳过规则 | 行级 vs 列级跳过混在一处 | 拆为 R1/R2（行级）和 C1/C2/C3/C4（列级），明确互不影响 |
 | 数值容错 | `quantity` 0 与 None 行为未与跳过规则交叉 | 统一并入 C4；新增浮点非整数 / 非数字 → 400 阻断 |
 | 数值容错 | `ttl` 容错未定义 | 新增：非整数字符串入库为 `None`，不阻断 |
