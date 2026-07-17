@@ -231,3 +231,36 @@ class TaskListResponse(BaseModel):
 
     items: list[TaskRead]
     total: int
+
+
+# ========== 今日概述（Dashboard）模式 ==========
+
+class DashboardCompanyCount(BaseModel):
+    """今日概述 - 单家公司在三档上的任务计数（含 total）。"""
+
+    company_id: int
+    company_name: str
+    urgent: int
+    due_soon: int
+    early: int
+    total: int
+
+
+class DashboardSummary(BaseModel):
+    """今日概述 - 全局合计；字段值 = companies[] 同名字段求和（单一真理源）。"""
+
+    urgent: int
+    due_soon: int
+    early: int
+    total: int
+
+
+class DashboardTodayResponse(BaseModel):
+    """今日概述响应：today + summary + companies[]。"""
+
+    today: str
+    summary: DashboardSummary
+    companies: list[DashboardCompanyCount] = []
+
+
+# ========== 今日概述 模块结束 ==========

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import companies, projects, task_types, tasks
+from app.api import companies, dashboard, projects, task_types, tasks
 from app.services.scheduler import apscheduler_instance
 
 
@@ -23,3 +23,4 @@ app.include_router(companies.router)
 app.include_router(projects.router)
 app.include_router(task_types.router)
 app.include_router(tasks.router)
+app.include_router(dashboard.router)

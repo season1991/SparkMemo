@@ -78,7 +78,7 @@ SparkMemo/
 | 模块 | 查阅文章 | 完成情况 |
 |:-----|:---------|:--------:|
 | 任务管理 | [./task_management.md](./task_management.md) | [x] 已完成 |
-| 今日概述 | [./dashboard.md](./dashboard.md) | [ ] 未完成 |
+| 今日概述 | [./dashboard.md](./dashboard.md) | [x] 已完成 |
 
 
 ## 5. 开发规范
