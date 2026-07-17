@@ -1,7 +1,8 @@
 # 邮箱配置模块规格（前端）
 
-> 适配 OpenAPI：[../../backend/openapi/email_notification.json](../../backend/openapi/email_notification.json)（路径 `/api/email-config`、schema `EmailConfigRead` / `EmailConfigWrite`）
+> 适配 OpenAPI：[../../backend/openapi/email_notification.json](../../backend/openapi/email_notification.json)（路径 `/api/email-config`、`/api/email/send-test`；schema `EmailConfigRead` / `EmailConfigWrite`；OpenAPI `info.version = 0.4.0`）
 > 适配后端 spec：[../../backend/spec/email_notification.md](../../backend/spec/email_notification.md)
+> 前端实现版本：v0.4（对齐后端 v0.4：新增 `send_time` / `active` 调度字段 + `POST /api/email/send-test`）
 > 页面入口：`views/EmailConfig.vue`（路由 `/email-config`）
 > 全局规则遵循 [./README.md](./README.md)；本文档只描述本模块特有的页面拆解、功能点交互与测试案例。
 
@@ -125,13 +126,49 @@
         │   │   <el-input v-model="form.recipient_name"/>│  │
         │   │ </el-form-item>                      │     │
         │   └──────────────────────────────────────┘     │
+        │                                                │
+        │   <el-divider>定时调度</el-divider>            │
+        │                                                │
+        │   ┌─ 每日发送时间 ────────────────────────┐    │
+        │   │ <el-form-item label="每日发送时间"     │    │
+        │   │                  prop="send_time">    │    │
+        │   │   <el-time-picker                     │    │
+        │   │     v-model="form.send_time"          │    │
+        │   │     format="HH:mm"                    │    │
+        │   │     value-format="HH:mm"              │    │
+        │   │     placeholder="例如 08:00" />       │    │
+        │   │   <span class="hint">                 │    │
+        │   │     24h HH:MM；仅在「启用定时发送」打开│    │
+        │   │     后由后端调度器按此时点每日触发。   │    │
+        │   │   </span>                             │    │
+        │   │ </el-form-item>                       │    │
+        │   └───────────────────────────────────────┘    │
+        │   ┌─ 启用定时发送 ────────────────────────┐    │
+        │   │ <el-form-item label="启用定时发送"     │    │
+        │   │                  prop="active">        │    │
+        │   │   <el-switch                          │    │
+        │   │     v-model="form.active"             │    │
+        │   │     active-text="启用"                 │    │
+        │   │     inactive-text="停用" />           │    │
+        │   │   <span class="hint">                 │    │
+        │   │     关闭后调度器 Job 暂停；「测试发送」│    │
+        │   │     不受此开关约束。                    │    │
+        │   │   </span>                             │    │
+        │   │ </el-form-item>                       │    │
+        │   └───────────────────────────────────────┘    │
         │ </el-form>                                    │
         │                                                │
-        │ <div class="form-actions">                    │
+        │ <div class="form-actions form-actions--split"> │
         │   <el-button @click="onReset">重置</el-button> │
+        │   <el-button                                  │
+        │              :loading="store.testing"         │
+        │              :disabled="store.testing || store.saving"│
+        │              @click="onSendTest">             │
+        │     测试发送                                  │
+        │   </el-button>                                │
         │   <el-button type="primary"                   │
         │              :loading="store.saving"          │
-        │              :disabled="store.saving"         │
+        │              :disabled="store.saving || store.testing"│
         │              @click="onSubmit">               │
         │     保存配置                                  │
         │   </el-button>                                │
@@ -158,8 +195,8 @@
 | Layout | `layouts/AppSidebar.vue` | 左侧导航条（Logo + 导航项），**追加「邮箱配置」第三项** |
 | Layout | `layouts/AppHeader.vue` | 页面页头，左侧渲染 `route.meta.title` |
 | View | `views/EmailConfig.vue` | 主页骨架，承载标题区、表单卡片、元信息 |
-| Store | `stores/useEmailConfigStore.js` | 单行邮箱配置的 state / actions / getters |
-| API | `api/email_config.js` | `getEmailConfig()` / `saveEmailConfig(payload)` |
+| Store | `stores/useEmailConfigStore.js` | 单行邮箱配置的 state / actions / getters；含 `testing` state + `sendTest(payload)` action |
+| API | `api/email_config.js` | `getEmailConfig()` / `saveEmailConfig(payload)` / `sendTestEmail(payload)` |
 
 > 不引入额外的公共组件；本模块体量小，表单直接放在 view 内部。
 
@@ -235,9 +272,9 @@
 | 操作前 | 表单字段已填写 |
 | 触发动作 | 点击「保存配置」 |
 | 前端校验 | `el-form.validate()` 失败 → 字段红字 + 按钮恢复可用（不弹 toast） |
-| 接口请求 | `PUT /api/email-config` body（snake_case）：<br>`{ smtp_host, smtp_port, smtp_user, smtp_password?, use_tls, sender_email, sender_name, recipient_email, recipient_name? }`<br>其中：<br>• `smtp_password` 在用户**实际输入**时为字符串，否则为 `null`<br>• `recipient_name` 空时为 `null` |
+| 接口请求 | `PUT /api/email-config` body（snake_case）：<br>`{ smtp_host, smtp_port, smtp_user, smtp_password?, use_tls, sender_email, sender_name, recipient_email, recipient_name?, send_time, active }`<br>其中：<br>• `smtp_password` 在用户**实际输入**时为字符串，否则为 `null`<br>• `recipient_name` 空时为 `null`<br>• **`send_time` / `active` 每次 PUT 显式覆盖**（与 `smtp_password` 的「留空保留旧值」行为不同），保证 UI 开关可靠切换调度器 Job 状态 |
 | 成功逻辑 | `ElMessage.success('保存成功')`；用响应替换 `store.config`；密码框 placeholder 切到「已设置」；底部元信息 `created_at / updated_at` 同步刷新 |
-| 失败逻辑（400） | `ElMessage.error(detail)`（detail 由 axios 拦截器 humanize 后为字符串）；表单不重置 |
+| 失败逻辑（400） | `ElMessage.error(detail)`（detail 由 axios 拦截器 humanize 后为字符串；含 `smtp_port` 越界 / 邮箱非法 / `send_time` 非 24h 正则 / 长度越界）；表单不重置 |
 | 失败逻辑（422） | 字段红字按 `detail[].loc` 映射（沿用既有约定）；顶部 toast 聚合 `msg` |
 | 失败逻辑（5xx / 网络） | `ElMessage.error('服务异常，请稍后重试')` 或 `'网络异常，请稍后重试'` |
 
@@ -261,7 +298,7 @@
 | 操作前 | 用户可能改过表单字段 |
 | 触发动作 | 点击「重置」 |
 | 接口请求 | 无 |
-| 成功逻辑 | 表单所有字段**回滚到当前 `store.config` 的值**（不是清空）；`el-form.clearValidate()` 清空红字；密码框回到空字符串，placeholder 恢复 |
+| 成功逻辑 | 表单所有字段**回滚到当前 `store.config` 的值**（不是清空）；`el-form.clearValidate()` 清空红字；密码框回到空字符串，placeholder 恢复；`send_time` 与 `active` 一并回滚到 `store.config.send_time` / `store.config.active` |
 | 失败逻辑 | — |
 
 > 「重置」语义：**撤销未保存的修改**，回到「当前 store 中保存的版本」，不是「清空表单」。这与一般表单习惯略不同，hint 文字可考虑加 `不保存时点击重置可恢复上次保存值`（可选 v0.4）。
@@ -283,6 +320,61 @@
 | 在 `/email-config` 点浏览器后退 | 路由回退；**不**弹二次确认（v0.3 简化） |
 | 直接访问 `#/email-config` | 同 §2.1 首次加载行为 |
 | 直接访问 `#/email-config` 时后端 500 | error 卡片 + 「重试」按钮（无旧数据场景） |
+
+### 2.7 功能点：测试发送邮件
+
+#### 入口
+- 表单卡片底部「测试发送」按钮。
+
+#### 交互逻辑
+
+| 阶段 | 内容 |
+|------|------|
+| 操作前 | 表单字段已填写（含 `send_time` / `active`） |
+| 触发动作 | 点击「测试发送」 |
+| 前端校验 | `el-form.validate()` 失败 → 字段红字 + 按钮恢复可用（不弹 toast） |
+| 接口请求 | `POST /api/email/send-test`，body 与 `EmailConfigWrite` 同结构（snake_case，包含 `smtp_password` 明文与 `send_time` / `active`） |
+| 成功逻辑 | `ElMessage.success('已发送测试邮件至 <recipient_email>')`；响应 `{ok: true, sent_at, recipient}` 用于 toast 文案；**不**触发额外 GET（后端已自动 upsert） |
+| 失败逻辑（422） | 字段红字按 `detail[].loc` 映射；顶部 toast 聚合 `msg` |
+| 失败逻辑（500 / `MailerError`） | `ElMessage.error(detail)` 透传后端 SMTP 错误信息（如认证失败 / 连接超时 / 端口拒绝等）；表单不重置 |
+| 按钮互斥 | 「测试发送」loading 时「保存配置」禁用；反之亦然（见 §2.3 / §2.8 按钮状态表） |
+
+> **不受 `active` 开关约束**：即使 `active=false` 也允许调用，纯连通性验证。hint 文字明示：见 §1.3 调度区 `use_tls` 下方 hint。
+> **副作用**：后端在发送前会自动 `upsert` 入参配置（等价于 PUT），发送成功后 `store.config` 已是最新值，无需手动 reload。
+> **`smtp_password` 留空行为**与 §2.3 一致：表单密码框空 → payload 传 `null` → 后端保留旧密码。
+
+### 2.8 功能点：定时发送配置（`send_time` / `active`）
+
+#### 字段控件
+
+| 字段 | 控件 | 关键属性 |
+|------|------|---------|
+| `send_time` | `<el-time-picker>` | `format="HH:mm"` + `value-format="HH:mm"`；24h 零填充；placeholder `例如 08:00` |
+| `active` | `<el-switch>` | `active-text="启用"` + `inactive-text="停用"`；布尔值；hint 文字提示调度器语义 |
+
+#### 交互逻辑
+
+| 阶段 | 内容 |
+|------|------|
+| 操作前 | `store.config` 已有 `send_time` / `active` 默认值（`"08:00"` / `false`），表单回填 |
+| 触发动作（picker） | 用户在 `el-time-picker` 选择新时间 |
+| 触发动作（switch） | 用户切换「启用定时发送」开关 |
+| 前端校验 | `send_time` 触发 `blur` / `change` 时按 24h 正则校验；非法时字段红字（不弹 toast） |
+| 接口请求 | 与 §2.3 同一 PUT 提交，**显式覆盖**两字段（用户改不改都带当前值） |
+| 成功逻辑 | toast「保存成功」；响应回显最新 `send_time` / `active`；store 同步；后端调度器 Job `email_daily_dispatch` 按 `(active, send_time)` 切换 run / pause |
+| 失败逻辑 | 沿用 §2.3 错误约定（`send_time` 非 24h → 400） |
+
+#### 按钮状态扩展（含「测试发送」互斥）
+
+| 场景 | 「保存配置」 | 「测试发送」 | 「重置」 |
+|---|---|---|---|
+| 默认 | 可点 | 可点 | 可点 |
+| 保存中（`store.saving === true`） | loading + 禁用 | 禁用 | 禁用 |
+| 测试发送中（`store.testing === true`） | 禁用 | loading + 禁用 | 禁用 |
+| 加载中（首屏骨架） | 禁用（连同表单一起不可见） | 禁用 | 禁用 |
+
+#### 重置行为
+- §2.4 回滚语义同样适用于 `send_time` / `active`：点「重置」会回到 `store.config.send_time` / `store.config.active` 当前值。
 
 ---
 
@@ -307,6 +399,8 @@
 | `config.recipient_name` | `string \| null` | GET / PUT | 可空；1-64 字符 |
 | `config.created_at` | `string \| null` | GET / PUT 响应 | `YYYY-MM-DD`；渲染于底部元信息 |
 | `config.updated_at` | `string \| null` | GET / PUT 响应 | `YYYY-MM-DD`；渲染于底部元信息 |
+| `config.send_time` | `string` | GET / PUT | 24h `HH:MM` 零填充；默认 `"08:00"`；未配置时也回显默认值 |
+| `config.active` | `bool` | GET / PUT | 默认 `false`；切换后由后端调度器 pause / resume `email_daily_dispatch` Job |
 
 ### 3.2 form ↔ EmailConfigWrite
 
@@ -323,10 +417,13 @@ PUT payload 字段映射：
 | `form.sender_name` | `sender_name` | 必填 |
 | `form.recipient_email` | `recipient_email` | 必填 |
 | `form.recipient_name` | `recipient_name` | 空时传 `null` |
+| `form.send_time` | `send_time` | 必填；24h `HH:MM`；picker 默认 `08:00`；每次 PUT 显式覆盖 |
+| `form.active` | `active` | 必填；bool；开关默认 `false`；每次 PUT 显式覆盖 |
 
 > **空字符串 vs null**：表单字段全用字符串；提交前做一次转换：
 > - `smtp_password === ''` → `null`（用户没改）；
 > - `recipient_name === ''` → `null`（用户没填）。
+> `send_time` / `active` 不走"空串→null"逻辑（始终有值：`HH:MM` 字符串与 bool）。
 > 其余空字符串场景在前端 el-form 校验阶段已被必填规则拦下，不会进入 payload。
 
 ### 3.3 表单 el-form rules
@@ -341,8 +438,12 @@ PUT payload 字段映射：
 | `sender_name` | `[{ required: true, message: '请输入发件人显示名', trigger: 'blur' }, { min: 1, max: 64, message: '长度 1-64 字符', trigger: 'blur' }]` |
 | `recipient_email` | `[{ required: true, message: '请输入收件人邮箱', trigger: 'blur' }, { validator: validateEmail, trigger: 'blur' }]` |
 | `recipient_name` | `[{ validator: validateOptionalName, trigger: 'blur' }]`（非必填；非空时 1-64 字符） |
+| `send_time` | `[{ required: true, message: '请选择每日发送时间', trigger: 'change' }, { pattern: /^([01]\d\|2[0-3]):[0-5]\d$/, message: '请输入 24h HH:MM（如 08:30）', trigger: 'blur' }]` |
+| `active` | `[{ type: 'boolean', required: true, message: '请设置启用开关', trigger: 'change' }]` |
 
 `validateEmail` 自定义函数复用后端正则 `^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$`。
+
+`send_time` 正则 `^([01]\d|2[0-3]):[0-5]\d$` 与后端 Pydantic 字段校验完全一致，确保前端拦截的非法值与后端 400 错误码语义对齐。
 
 ---
 
@@ -372,6 +473,16 @@ PUT payload 字段映射：
 | 18 | GET 响应中 `smtp_password_set=false` 但其他字段已设置 | placeholder 显示「请输入」（提示必须设置密码）；保存后 `smtp_password_set=true` |
 | 19 | 保存中（`store.saving === true`）切路由到其他页 | 表单状态保留在内存中（路由切换不丢 store）；返回时仍可继续操作 |
 | 20 | 浏览器宽度 < 1280px | 按 [README §3.6](./README.md#36-兼容要求) 给提示（既有逻辑不动） |
+| 21 | 默认 GET 时 `send_time='08:00'` `active=false` | 表单 picker 显示 08:00；switch 关闭；元信息存在 |
+| 22 | 修改 `send_time` 为 `25:00` → blur | el-form 红字「请输入 24h HH:MM」；**不**触发 API；保存按钮保持可点但点击时仍校验失败 |
+| 23 | 修改 `send_time` 为 `09:30` `active=true` → 保存 | toast「保存成功」；GET 回显 `send_time='09:30' active=true`；底部 updated_at 更新 |
+| 24 | 第二次 PUT 只改 `active=false`，`send_time` 不动 | PUT payload 显式带 `send_time='09:30'`；GET 仍回显 `09:30`（不被清空） |
+| 25 | 点击「测试发送」按钮（表单已填合法） | 按钮 loading；「保存配置」禁用；200 → toast「已发送测试邮件至 xxx@…」；`store.config` 同步更新 |
+| 26 | 测试发送时把 `smtp_password` 留空 | 后端 upsert 时保留旧密码（沿用既有语义）；邮件正常发出；toast 成功 |
+| 27 | 测试发送时 SMTP 认证失败（后端 500 + `MailerError`） | toast 显示后端 `detail`（如认证失败 / 连接超时）；按钮恢复；表单不重置 |
+| 28 | 测试发送时把 `send_time` 改为 `9:00`（缺前导零） | 422 字段红字「请输入 24h HH:MM」；测试发送按钮恢复 |
+| 29 | `active=false` 状态下点「测试发送」 | 仍允许（不受 active 约束）；调度器 Job 维持 paused；toast 成功 |
+| 30 | 测试发送 loading 时切换路由离开 | Pinia store 状态保留；返回时表单值 / 字段错误 / 元信息仍在；按钮恢复可点 |
 
 ---
 
@@ -380,34 +491,37 @@ PUT payload 字段映射：
 ### 在范围内（本模块实现）
 
 - 新建 `views/EmailConfig.vue`（主页骨架 + 表单卡片）；
-- 新建 `api/email_config.js`（`getEmailConfig` / `saveEmailConfig`）；
-- 新建 `stores/useEmailConfigStore.js`（state + getters + actions）；
+- 新建 `api/email_config.js`（`getEmailConfig` / `saveEmailConfig` / `sendTestEmail`）；
+- 新建 `stores/useEmailConfigStore.js`（state + getters + actions，含 `testing` state + `sendTest(payload)` action）；
 - 路由表追加 `/email-config`；
 - 侧边栏 `navItems` 追加「邮箱配置」第三项（icon: `Message`）；
 - 端口 ↔ `use_tls` 联动（下拉预设）；
 - 密码框 placeholder 动态切换（未配置 / 已设置未改 / 已设置可改）；
-- 加载 / 保存三态（[README §5.5 加载与错误三态](frontend/spec/dashboard.md) 约定）；
+- 加载 / 保存 / 测试发送三态（[README §5.5 加载与错误三态](frontend/spec/dashboard.md) 约定）；
 - 前端表单 el-form rules + 后端 400 / 422 兜底；
 - 「保存配置」按钮统一文案（不区分 insert / update）；
-- 「重置」按钮回到 store.config 当前值；
-- 手动 QA 清单（§4）。
+- 「重置」按钮回到 store.config 当前值（含 `send_time` / `active` 同步回滚）；
+- **v0.4 新增** `send_time` 字段（`el-time-picker`，24h `HH:MM`）+ `active` 字段（`el-switch`）UI + el-form rules（24h 正则 `^([01]\d|2[0-3]):[0-5]\d$`）；
+- **v0.4 新增** `send_time` / `active` 每次 PUT 显式覆盖语义（与 `smtp_password` 留空保留语义区分）；
+- **v0.4 新增**「测试发送」按钮 → `POST /api/email/send-test`（含 loading 互斥 / 422 字段红字 / 500 SMTP 错误 toast）；
+- **v0.4 新增** 测试发送按钮：不受 `active` 开关约束；后端自动 upsert 配置，发送成功无需手动 reload；
+- 手动 QA 清单（§4，共 30 条）。
 
 ### 不在本模块范围（与本次 email_config 同步声明）
 
-- **不**实现任何邮件发送逻辑（前端不调发送接口；后端 mailer / dispatcher 留待后续版本）；
+- **不**实现正式邮件调度模板渲染（属后端 APScheduler `render_daily_dispatch`，业务模板另行定义）；
 - **不**渲染历史发送记录 / 发送日志表（spec 已延后）；
-- **不**实现定时调度 UI（属后端 APScheduler 扩展）；
+- **不**实现 `POST /api/email/send`（仅连通性测试发送，调度发送由后端 APScheduler Job 触发）；
 - **不**删除 `/settings` 占位路由（保持向后兼容）；
 - **不**改既有模块（dashboard / task_management / company_project）的任何代码；
 - **不**引入 vitest / jest（沿用 [README §3.6](./README.md#36-兼容要求) 的手动 QA 路线）；
 - **不**改 [README §3 全局通用规则](./README.md#3-全局通用规则)（分页 / 筛选 / 表单 / 弹窗等既有约定对单行表单页天然不适用，本模块仅引用「表单通用校验规则」与「错误文案」子节）。
 
-### v0.4+ 演进项（不在本轮）
+### v0.5+ 演进项（不在本轮）
 
-- 「重置」按钮语义扩展：增加 `ElMessageBox.confirm` 二次确认（v0.4）；
-- 表单 dirty 检测 + 路由切换 / 关闭前二次确认；
-- 「测试发送」按钮（依赖后端 `POST /api/email/send` 上线）；
-- 「定时发送」开关（依赖后端 `email_config.send_time` / `active` 字段上线）；
+- 「重置」按钮增加 `ElMessageBox.confirm` 二次确认（防误触丢改）；
+- 表单 dirty 检测 + 路由切换 / 浏览器关闭前二次确认；
+- 发送历史 / 发送日志表（依赖后端 `mail_logs` 上线）；
 - 多账号 / 多模板支持；
 - i18n / 移动端适配。
 
@@ -419,6 +533,6 @@ PUT payload 字段映射：
 |------|------|
 | 前端全局规则 | [./README.md](./README.md) |
 | 后端模块 spec | [../../backend/spec/email_notification.md](../../backend/spec/email_notification.md) |
-| OpenAPI 接口契约 | [../../backend/openapi/email_notification.json](../../backend/openapi/email_notification.json) |
+| OpenAPI 接口契约 | [../../backend/openapi/email_notification.json](../../backend/openapi/email_notification.json)（v0.4.0；含 `/api/email-config` + `/api/email/send-test`） |
 | 今日概述前端 spec | [./dashboard.md](./dashboard.md)（参考其三态约定） |
 | 任务管理前端 spec | [./task_management.md](./task_management.md)（参考其表单 / 校验 / toast 约定） |
