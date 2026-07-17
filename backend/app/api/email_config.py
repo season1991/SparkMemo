@@ -23,6 +23,8 @@ def _to_read(row) -> EmailConfigRead:
         sender_name=row.sender_name,
         recipient_email=row.recipient_email,
         recipient_name=row.recipient_name,
+        send_time=row.send_time,
+        active=row.active,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -33,7 +35,7 @@ _EMPTY_READ = EmailConfigRead(exists=False)
 
 @router.get("", response_model=EmailConfigRead)
 def get_email_config_endpoint(db=Depends(get_db)) -> EmailConfigRead:
-    """取当前邮箱配置；未配置返回 exists=false + 所有字段 null/false。"""
+    """取当前邮箱配置；未配置返回 exists=false + 业务字段 null/false。"""
     row = crud.email_config.get_email_config(db)
     if row is None:
         return _EMPTY_READ
@@ -47,6 +49,7 @@ def upsert_email_config_endpoint(
     """upsert 单行配置。
 
     - smtp_password 留空字符串或 None 视为「保留旧值」；
+    - send_time / active 每次 PUT 显式覆盖；
     - 字段校验失败由 app 级 RequestValidationError 处理器映射为 400（见 main.py）。
     """
     row = crud.email_config.upsert_email_config(db, payload)

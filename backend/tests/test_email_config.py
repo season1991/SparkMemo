@@ -206,3 +206,72 @@ async def test_password_never_in_response(client):
     )
     assert second_put.status_code == 200
     _assert_no_password_leak(second_put.json())
+
+
+# ===== 用例 12：未配置 GET 回显 send_time 默认值 + active=false =====
+async def test_get_default_send_time_and_active(client):
+    response = await client.get("/api/email-config")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["exists"] is False
+    assert body["send_time"] == "08:00"
+    assert body["active"] is False
+
+
+# ===== 用例 13：send_time 非法格式 → 400 =====
+@pytest.mark.parametrize(
+    "bad_send_time", ["25:00", "24:60", "9:00", "ab:cd", "12:5", ""]
+)
+async def test_put_send_time_24h_regex_rejects_invalid(client, bad_send_time):
+    response = await client.put(
+        "/api/email-config", json=_base_payload(send_time=bad_send_time)
+    )
+    assert response.status_code == 400
+
+
+# ===== 用例 14：合法 send_time / active 持久化 + GET 回显 =====
+async def test_put_persists_send_time_and_active(client, db):
+    from app import models
+
+    response = await client.put(
+        "/api/email-config",
+        json=_base_payload(send_time="08:30", active=True),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["send_time"] == "08:30"
+    assert body["active"] is True
+
+    row = db.query(models.EmailConfig).one()
+    assert row.send_time == "08:30"
+    assert row.active is True
+
+    # GET 回显
+    get_response = await client.get("/api/email-config")
+    assert get_response.status_code == 200
+    get_body = get_response.json()
+    assert get_body["send_time"] == "08:30"
+    assert get_body["active"] is True
+
+
+# ===== 用例 15：第二次 PUT 即使只改 active，send_time 也显式覆盖 =====
+async def test_put_send_time_overrides_each_call(client, db):
+    from app import models
+
+    await client.put(
+        "/api/email-config",
+        json=_base_payload(send_time="08:00", active=False),
+    )
+    # 第二次只显式改 active，但 send_time 字段默认仍是 '08:00'（由 Pydantic 填充）
+    second = await client.put(
+        "/api/email-config",
+        json=_base_payload(send_time="09:30", active=True),
+    )
+    assert second.status_code == 200
+    body = second.json()
+    assert body["send_time"] == "09:30"
+    assert body["active"] is True
+
+    row = db.query(models.EmailConfig).one()
+    assert row.send_time == "09:30"
+    assert row.active is True

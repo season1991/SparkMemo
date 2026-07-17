@@ -92,8 +92,8 @@ class Task(Base):
 class EmailConfig(Base):
     """邮箱配置表（单行表）。
 
-    应用层固定以 id=1 读写；本表仅承担「SMTP 凭证 + 发件人 + 收件人」的存储职责，
-    不含任何调度 / 启用开关字段（与 spec/email_notification.md 对齐）。
+    应用层固定以 id=1 读写；承担「SMTP 凭证 + 发件人 + 收件人 + 调度开关」的存储职责。
+    调度字段 send_time / active 由 v0.4 引入；既有 MySQL 实例升级通过 lifespan 幂等 ALTER。
     """
 
     __tablename__ = "email_config"
@@ -108,6 +108,8 @@ class EmailConfig(Base):
     sender_name: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient_email: Mapped[str] = mapped_column(String(128), nullable=False)
     recipient_name: Mapped[Optional[str]] = mapped_column(String(64))
+    send_time: Mapped[str] = mapped_column(String(5), nullable=False, default="08:00")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[str] = mapped_column(String(10), default=_today_str, nullable=False)
     updated_at: Mapped[str] = mapped_column(
         String(10), default=_today_str, onupdate=_today_str, nullable=False

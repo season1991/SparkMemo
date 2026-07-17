@@ -52,6 +52,38 @@ def _enable_sqlite_fk(dbapi_conn, _):
 _models_Base = models.Base if hasattr(models, "Base") else _database.Base
 _models_Base.metadata.create_all(engine)
 
+
+# 幂等 ALTER：v0.4 新增 send_time / active 列；测试 SQLite 已存在 DB 也能升级
+def _ensure_email_config_columns_for_tests(engine) -> None:
+    table = "email_config"
+    with engine.begin() as conn:
+        if engine.dialect.name == "sqlite":
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            cols = {row[1] for row in rows}
+            if "send_time" not in cols:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN send_time VARCHAR(5) NOT NULL DEFAULT '08:00'"
+                )
+            if "active" not in cols:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN active BOOLEAN NOT NULL DEFAULT 0"
+                )
+        else:
+            for col, ddl in (
+                ("send_time", "VARCHAR(5) NOT NULL DEFAULT '08:00'"),
+                ("active", "TINYINT(1) NOT NULL DEFAULT 0"),
+            ):
+                exists = conn.exec_driver_sql(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+                    (table, col),
+                ).first()
+                if not exists:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
+
+_ensure_email_config_columns_for_tests(engine)
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
@@ -191,5 +223,48 @@ def make_task():
         db.commit()
         db.refresh(task)
         return task
+
+    return factory
+
+
+@pytest.fixture
+def make_email_config():
+    """创建 email_config 单行（v0.4 含 send_time / active）。"""
+    def factory(
+        db,
+        smtp_host="smtp.qq.com",
+        smtp_port=465,
+        smtp_user="user@qq.com",
+        smtp_password="secret123",
+        use_tls=True,
+        sender_email="user@qq.com",
+        sender_name="SparkMemo",
+        recipient_email="user@qq.com",
+        recipient_name=None,
+        send_time="08:00",
+        active=False,
+    ):
+        existing = db.get(models.EmailConfig, 1)
+        if existing is not None:
+            db.delete(existing)
+            db.commit()
+        row = models.EmailConfig(
+            id=1,
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            smtp_user=smtp_user,
+            smtp_password=smtp_password,
+            use_tls=use_tls,
+            sender_email=sender_email,
+            sender_name=sender_name,
+            recipient_email=recipient_email,
+            recipient_name=recipient_name,
+            send_time=send_time,
+            active=active,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
 
     return factory

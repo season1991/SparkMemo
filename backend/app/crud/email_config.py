@@ -17,6 +17,7 @@ def upsert_email_config(db, payload: EmailConfigWrite) -> models.EmailConfig:
         - 若不存在 -> INSERT 一行（id=1）
         - 若存在且 smtp_password 为空/None -> 保留旧密码，其他字段 UPDATE
         - 若存在且 smtp_password 非空 -> 覆盖密码，其他字段 UPDATE
+        - send_time / active 每次 PUT 显式覆盖（与 smtp_password 行为不同）
 
     返回:
         EmailConfig: 持久化后的对象
@@ -35,6 +36,8 @@ def upsert_email_config(db, payload: EmailConfigWrite) -> models.EmailConfig:
             sender_name=payload.sender_name,
             recipient_email=payload.recipient_email,
             recipient_name=payload.recipient_name,
+            send_time=payload.send_time,
+            active=payload.active,
         )
         db.add(row)
     else:
@@ -49,8 +52,22 @@ def upsert_email_config(db, payload: EmailConfigWrite) -> models.EmailConfig:
         existing.sender_name = payload.sender_name
         existing.recipient_email = payload.recipient_email
         existing.recipient_name = payload.recipient_name
+        # 调度字段：每次 PUT 显式覆盖（不留空保留）
+        existing.send_time = payload.send_time
+        existing.active = payload.active
         # updated_at 由 onupdate=_today_str 自动更新
         db.add(existing)
     db.commit()
-    db.refresh(existing if existing is not None else row)
-    return existing if existing is not None else row
+    result = existing if existing is not None else row
+    db.refresh(result)
+
+    # 提交后同步 APScheduler Job（active=true → 重设；active=false → 暂停）
+    try:
+        from app.services.scheduler import sync_email_dispatch_job
+
+        sync_email_dispatch_job(result)
+    except Exception:
+        # 调度器同步失败不影响配置写入；日志留待 mail_logs 上线后处理
+        pass
+
+    return result

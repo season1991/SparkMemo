@@ -274,6 +274,9 @@ class DashboardTodayResponse(BaseModel):
 # 避免引入 pydantic.EmailStr 强依赖的 email-validator 包。
 _EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
+# 24h 零填充 HH:MM 正则：[01]\d|2[0-3] 覆盖 00-23；[0-5]\d 覆盖 00-59
+_HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
 
 def _validate_email(value: Optional[str], field_name: str) -> Optional[str]:
     """邮箱格式校验：非空时必须符合 user@domain.tld 形式；空值放行。"""
@@ -284,10 +287,18 @@ def _validate_email(value: Optional[str], field_name: str) -> Optional[str]:
     return value
 
 
+def _validate_send_time(value: str) -> str:
+    """调度时间校验：必须是 24h 零填充 HH:MM；非空、长度恰为 5。"""
+    if not isinstance(value, str) or not _HHMM_PATTERN.match(value):
+        raise ValueError("send_time must be HH:MM (24h, zero-padded)")
+    return value
+
+
 class EmailConfigWrite(BaseModel):
     """邮箱配置写入请求体：用于 PUT /api/email-config 的单行 upsert。
 
     - smtp_password 留空字符串或 None 视为「保留旧值」，由路由层处理；
+    - send_time / active 每次 PUT 显式覆盖（与 smtp_password 行为不同）；
     - 字段校验失败时 Pydantic 默认抛 422，由路由层映射为 400 满足 spec 错误约定。
     """
 
@@ -300,6 +311,8 @@ class EmailConfigWrite(BaseModel):
     sender_name: str
     recipient_email: str
     recipient_name: Optional[str] = None
+    send_time: str = "08:00"
+    active: bool = False
 
     @field_validator("smtp_host")
     @classmethod
@@ -339,11 +352,17 @@ class EmailConfigWrite(BaseModel):
             raise ValueError("sender_name length must be 1-64")
         return value
 
+    @field_validator("send_time")
+    @classmethod
+    def _check_send_time(cls, value: str) -> str:
+        return _validate_send_time(value)
+
 
 class EmailConfigRead(BaseModel):
-    """邮箱配置响应体：未配置时 exists=false 且所有字段为 None / False。
+    """邮箱配置响应体：未配置时 exists=false 且业务字段为 None / False。
 
     注意：响应**永远不回 smtp_password 明文**，用 smtp_password_set: bool 替代。
+    send_time / active 始终回显，方便前端表单回填。
     """
 
     exists: bool
@@ -357,6 +376,8 @@ class EmailConfigRead(BaseModel):
     sender_name: Optional[str] = None
     recipient_email: Optional[str] = None
     recipient_name: Optional[str] = None
+    send_time: str = "08:00"
+    active: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
