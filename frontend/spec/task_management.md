@@ -245,7 +245,13 @@ UI 操作可见性：
 | 公司 | `<el-select>` | ✓ | 空 |
 | 项目 | `<el-select>`（按公司联动） | ✓ | 空 |
 | 截止日 | `<el-date-picker value-format="YYYY-MM-DD">` | ✓ | 今天 |
-| 提醒起 | `<el-date-picker>` | — | `due_at - 1 天`，可改 |
+| 提前提醒 | `<el-select>` | ✓ | `on_due`（当天） |
+| 特定提醒日期 | `<el-date-picker value-format="YYYY-MM-DD">` | 仅「提前提醒 = 特定」时可见、必填 | — |
+
+> 「提前提醒」枚举：`当天` / `提前 1 天` / `提前 2 天` / `提前 3 天` / `提前 1 周` / `提前 1 个月` / `特定`。
+> 与后端 `remind_rule` 枚举一一对应：`on_due` / `before_1d` / `before_2d` / `before_3d` / `before_1w` / `before_1m` / `custom`。
+> 「特定提醒日期」仅在「提前提醒」切换为「特定」时显示，提交时作为 `custom_remind_start_at` 传给后端；其余情况 UI 不渲染、提交时设为 `null`。
+> 表单顶层的「截止日」与「提前提醒」控件在视觉上并列；两者下方再条件性渲染「特定提醒日期」。
 
 - 底部按钮：「取消」「保存」；
 - 保存中：按钮 loading，按钮禁用。
@@ -257,7 +263,7 @@ UI 操作可见性：
 | 操作前 | 主页正常展示 |
 | 触发动作 | 点击 `+ 新建任务` |
 | 接口请求 | 无 |
-| 成功逻辑 | 抽屉打开，焦点落到「标题」输入框 |
+| 成功逻辑 | 抽屉打开，焦点落到「标题」输入框；「提前提醒」默认 `当天`；「特定提醒日期」隐藏 |
 | 失败逻辑 | — |
 
 #### 交互逻辑：选择公司 → 项目联动
@@ -270,14 +276,24 @@ UI 操作可见性：
 | 成功逻辑 | 项目下拉数据源刷新；若之前已选项目，清空项目值 |
 | 失败逻辑 | 项目下拉显示「加载失败」+ 空列表（允许用户先保存公司，下次再补项目——但保存时会校验必填） |
 
-#### 交互逻辑：截止日变化 → 提醒起默认
+#### 交互逻辑：「提前提醒」切换
 
 | 阶段 | 内容 |
 |------|------|
-| 操作前 | `due_at` 已填，提醒起可能已填 |
+| 操作前 | 当前为某一档（默认 `当天`） |
+| 触发动作 | 在下拉中切换其他档 |
+| 接口请求 | 无 |
+| 成功逻辑 | 「特定提醒日期」控件显隐随之切换：选「特定」→ 显示并打 `*` 必填；选其他档 → 隐藏并清空其值 |
+| 失败逻辑 | — |
+
+#### 交互逻辑：截止日变化 → 影响 reminder 计算时机
+
+| 阶段 | 内容 |
+|------|------|
+| 操作前 | `due_at` 已填；「提前提醒」可能是某一档（默认 `当天`）或「特定」 |
 | 触发动作 | 修改 `due_at` |
 | 接口请求 | 无 |
-| 成功逻辑 | 提醒起若为空或等于上一次 `due_at - 1 天`，自动设为 `new_due_at - 1 天` |
+| 成功逻辑 | **如果当前选的是预设档（非「特定」）**：保持 `remind_rule` 不变，后端在下次提交时按新 `due_at` 重新翻译 `remind_start_at`；本端不预填（避免误以为已存）。<br>**如果当前选的是「特定」**：保持 `custom_remind_start_at` 不变（独立于 `due_at`）；若新 `due_at < custom_remind_start_at`，字段下方红字「开始提醒日期晚于截止日」+ 「保存」禁用，必须手动调 `custom_remind_start_at` 才能提交。 |
 | 失败逻辑 | — |
 
 #### 交互逻辑：保存
@@ -286,9 +302,9 @@ UI 操作可见性：
 |------|------|
 | 操作前 | 表单字段已填写 |
 | 触发动作 | 点击「保存」 |
-| 接口请求 | `POST /api/tasks` body（snake_case）：<br>`{ title, description?, task_type_id?, company_id, project_id, due_at, remind_start_at? }` |
+| 接口请求 | `POST /api/tasks` body（snake_case）：<br>`{ title, description?, task_type_id?, company_id, project_id, due_at, remind_rule, custom_remind_start_at }`<br>其中 `custom_remind_start_at` 仅在 `remind_rule='custom'` 时为真实日期，其余传 `null` |
 | 成功逻辑 | 抽屉关闭；列表首行插入新任务；`total += 1`；`ElMessage.success('创建成功')` |
-| 失败逻辑 | 抽屉不关闭；<br>400 → 顶部 toast（`ElMessage.error(detail)`）；<br>422 → 解析 `detail[].loc` 映射回表单字段红字；<br>5xx → 顶部 toast |
+| 失败逻辑 | 抽屉不关闭；<br>400 → 顶部 toast（`ElMessage.error(detail)`）；常见场景：「custom 模式缺日期」「翻译结果晚于 due_at」；<br>422 → 解析 `detail[].loc` 映射回表单字段红字；<br>5xx → 顶部 toast |
 
 ---
 
@@ -301,6 +317,7 @@ UI 操作可见性：
 - 抽屉标题：「编辑任务」；
 - 抽屉顶部紧贴「提醒计划」区域：渲染 `<ReminderChips :reminders="current.reminders" :due-at="current.due_at" />`；
 - 字段预填当前任务值；
+- 「提前提醒」与「特定提醒日期」两个控件（与新建同结构）；
 - 底部按钮：「取消」「保存」。
 
 #### 交互逻辑：打开编辑抽屉
@@ -310,7 +327,7 @@ UI 操作可见性：
 | 操作前 | 列表已渲染，目标行可见 |
 | 触发动作 | 点击行内 `编辑` |
 | 接口请求 | `GET /api/tasks/{id}` |
-| 成功逻辑 | `useTaskStore.current` 写入；抽屉打开；表单预填；ReminderChips 渲染 |
+| 成功逻辑 | `useTaskStore.current` 写入（含 `due_at` / `remind_start_at` / `reminders`）；抽屉打开；表单预填；ReminderChips 渲染。**「提前提醒」反推**：按 [后端 spec Assumptions §14](../../backend/spec/task_management.md) 的规则，从 `current.due_at` 与 `current.remind_start_at` 反推最近匹配的 `remind_rule`（精确匹配 `on_due`/`before_1d`/`before_2d`/`before_3d`/`before_1w`/`before_1m`），匹配上→对应档位 + 隐藏「特定提醒日期」；**任何不匹配**（包括所有非预设偏移）一律归为 `custom`，**强制**显示「特定提醒日期」并填入 `current.remind_start_at`（UI 必须显式，不能静默归为某档预设）。 |
 | 失败逻辑 | toast「加载失败」+ 抽屉不打开 |
 
 #### 交互逻辑：保存编辑
@@ -319,9 +336,9 @@ UI 操作可见性：
 |------|------|
 | 操作前 | 抽屉打开，表单已修改 |
 | 触发动作 | 点击「保存」 |
-| 接口请求 | `PUT /api/tasks/{id}` body：<br>`{ title, description?, task_type_id?, company_id, project_id, due_at, remind_start_at }` |
+| 接口请求 | `PUT /api/tasks/{id}` body：<br>`{ title, description?, task_type_id?, company_id, project_id, due_at, remind_rule, custom_remind_start_at }`<br>其中 `custom_remind_start_at` 仅在 `remind_rule='custom'` 时为真实日期，其余传 `null` |
 | 成功逻辑 | 抽屉关闭；列表对应行内容替换；`current` 清空；`ElMessage.success('更新成功')` |
-| 失败逻辑 | 抽屉不关闭；422 字段红字；其他 toast |
+| 失败逻辑 | 抽屉不关闭；422 字段红字；400 toast；其他 toast |
 
 ---
 
@@ -522,16 +539,53 @@ UI 操作可见性：
   11. 断言 toast「创建成功」出现。
 - **预期**：任务创建成功。
 
-#### TC-TM-04 新建任务（422 字段错误）
+#### TC-TM-04 新建任务（特定模式超限 400 拦截）
 - **前置**：同 TC-TM-03；
 - **步骤**：
   1. 打开抽屉；
-  2. 截止日 `2026-08-10`、提醒起手动改为 `2026-08-15`（大于截止日）；
-  3. 点击「保存」；
-  4. 断言网络收到 `POST /api/tasks` 响应 400 或 422（后端 400）；
+  2. 截止日选 `2026-08-10`；
+  3. 「提前提醒」切换到「特定」；
+  4. 「特定提醒日期」填 `2026-08-15`（晚于截止日）；
+  5. 点击「保存」；
+  6. 断言抽屉未关闭；
+  7. 断言「特定提醒日期」字段下方红字「开始提醒日期晚于截止日」（前端表单校验拦截，未发请求）。
+- **预期**：表单不提交，不发出 POST 请求（前端表单校验拦截）。
+
+#### TC-TM-04b 新建任务（specific 缺日期 400 后端拦截）
+- **前置**：同 TC-TM-03；
+- **步骤**：
+  1. 打开抽屉；
+  2. 截止日选 `2026-08-15`；
+  3. 「提前提醒」选「特定」，**不填**特定提醒日期直接点保存（绕过前端校验用 `page.evaluate('form.remind_rule = "custom"; form.custom_remind_start_at = null')` 模拟）；
+  4. 断言网络收到 `POST /api/tasks` 响应 400；
   5. 断言抽屉未关闭；
-  6. 断言后端 detail 文案展示（`ElMessage.error` 或字段红字）。
-- **预期**：表单不提交，提示错误。
+  6. 断言 toast 展示后端 detail 文案。
+- **预期**：custom 模式缺日期被后端 400 阻断。
+
+#### TC-TM-04c 新建任务（预设档直接提交）
+- **前置**：同 TC-TM-03；
+- **步骤**：
+  1. 打开抽屉；
+  2. 截止日 `2026-08-15`、保持默认「当天」；
+  3. 断言「特定提醒日期」控件隐藏；
+  4. 点击「保存」；
+  5. 断言网络收到 `POST /api/tasks` 且 body 含 `remind_rule='on_due'`、`due_at='2026-08-15'`、`custom_remind_start_at=null`；
+  6. 断言抽屉关闭，列表首行 `remind_start_at` 列显示 `2026-08-15`（后端翻译后回显）。
+- **预期**：预设档提交成功，前端正确序列化。
+
+#### TC-TM-04d 编辑任务（反推 `custom`）
+- **前置**：已存在 pending 任务 X（`due_at=2026-08-15`，`remind_start_at=2026-08-05`，对应「提前 10 天」，不属于任何预设档）；
+- **步骤**：
+  1. 在 X 行点击 `编辑`；
+  2. 抽屉打开后断言：
+     - 「提前提醒」下拉选中「特定」；
+     - 「特定提醒日期」控件**可见且必填**；
+     - 其值 = `2026-08-05`。
+  3. 修改标题为「TC 改 X」；
+  4. 点击「保存」；
+  5. 断言网络 `PUT /api/tasks/{X}` body 含 `remind_rule='custom'`、`custom_remind_start_at='2026-08-05'`、`due_at='2026-08-15'`；
+  6. 断言列表中 X 行的 `remind_start_at` 仍显示 `2026-08-05`。
+- **预期**：反推逻辑对非预设偏移回到 `custom` 并强制显示日期输入框。
 
 #### TC-TM-05 编辑任务
 - **前置**：已存在 pending 任务 X；

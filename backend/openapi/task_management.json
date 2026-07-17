@@ -888,16 +888,14 @@
           "tasks"
         ],
         "summary": "Create Task",
-        "description": "创建任务，含必填校验、日期校验和外键校验。",
+        "description": "创建任务；due_at 与 remind_rule 必填；custom 模式下 custom_remind_start_at 必填；后端按 remind_rule 翻译出最终 remind_start_at 入库。",
         "operationId": "create_task_api_tasks_post",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
+                "$ref": "#/components/schemas/TaskCreate"
               }
             }
           }
@@ -969,7 +967,7 @@
           "tasks"
         ],
         "summary": "Update Task",
-        "description": "更新任务全部字段，保持 status 和 completed_at 不被隐式修改。",
+        "description": "更新任务全部字段；remind_rule 与 due_at 一并提交后由后端重算 remind_start_at；remind_start_at 不直接接收。",
         "operationId": "update_task_api_tasks__task_id__put",
         "parameters": [
           {
@@ -987,9 +985,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
+                "$ref": "#/components/schemas/TaskUpdate"
               }
             }
           }
@@ -1300,6 +1296,20 @@
         "title": "ReminderItem",
         "description": "单条提醒计划项。"
       },
+      "RemindRule": {
+        "type": "string",
+        "enum": [
+          "on_due",
+          "before_1d",
+          "before_2d",
+          "before_3d",
+          "before_1w",
+          "before_1m",
+          "custom"
+        ],
+        "title": "RemindRule",
+        "description": "提醒起始规则：用户表达「什么时候开始提醒」的业务意图；后端按此配合 due_at 翻译出最终 remind_start_at 入库。前端 select 选项与之一一对应：on_due=当天 / before_1d=提前1天 / before_2d=提前2天 / before_3d=提前3天 / before_1w=提前1周（固定7天）/ before_1m=提前1个月（按日历月，月末clamp）/ custom=特定（须配合 custom_remind_start_at）。该字段不入库。"
+      },
       "TaskCompanyRef": {
         "properties": {
           "id": {
@@ -1318,6 +1328,149 @@
         ],
         "title": "TaskCompanyRef",
         "description": "公司引用对象，用于任务详情响应。"
+      },
+      "TaskCreate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "任务标题，1-200 字符。"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "任务描述，可空。"
+          },
+          "task_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Type Id",
+            "description": "外键 task_types.id，可空。"
+          },
+          "company_id": {
+            "type": "integer",
+            "title": "Company Id",
+            "description": "外键 companies.id，必填。"
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id",
+            "description": "外键 projects.id，必填。"
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At",
+            "description": "截止日，YYYY-MM-DD，必填。"
+          },
+          "remind_rule": {
+            "$ref": "#/components/schemas/RemindRule",
+            "description": "提醒起始规则，必填。后端按此配合 due_at 翻译出最终 remind_start_at 入库。"
+          },
+          "custom_remind_start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "YYYY-MM-DD；仅在 remind_rule='custom' 时必填。"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Remind Start At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "company_id",
+          "project_id",
+          "due_at",
+          "remind_rule"
+        ],
+        "title": "TaskCreate",
+        "description": "创建任务请求体。前端传 remind_rule 表达业务意图（不传 remind_start_at）；后端入库前用 resolve_remind_start_at(due_at, remind_rule, custom_remind_start_at) 翻译。"
+      },
+      "TaskUpdate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "task_type_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Type Id"
+          },
+          "company_id": {
+            "type": "integer",
+            "title": "Company Id"
+          },
+          "project_id": {
+            "type": "integer",
+            "title": "Project Id"
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At",
+            "description": "YYYY-MM-DD。"
+          },
+          "remind_rule": {
+            "$ref": "#/components/schemas/RemindRule",
+            "description": "提醒起始规则；后端按当前 due_at 重新翻译 remind_start_at。"
+          },
+          "custom_remind_start_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Remind Start At",
+            "description": "仅在 remind_rule='custom' 时必填。"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "company_id",
+          "project_id",
+          "due_at",
+          "remind_rule"
+        ],
+        "title": "TaskUpdate",
+        "description": "更新任务请求体。remind_rule + due_at 一并提交，由后端重新翻译并存入 remind_start_at；remind_start_at 字段不接受外部直接覆盖。"
       },
       "TaskListResponse": {
         "properties": {

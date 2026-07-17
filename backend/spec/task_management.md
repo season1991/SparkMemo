@@ -14,7 +14,7 @@
 1. **任务 CRUD**：创建、修改、删除、完成；提供 `status` 字段标识「是否完成」（`pending` / `completed` / `overdue_done`）；
 2. **任务类型用户自定义**（`task_types`）：增删改查；
 3. **公司与项目作为一等实体**（`companies`、`projects`）：独立 CRUD，被任务外键引用；项目隶属于公司；
-4. **deadline + 自定义起始提醒日期**：每条任务存 `remind_start_at`（10 字符字符串 `YYYY-MM-DD`）。从 `remind_start_at` 起至 `due_at` 止，**每天对应一条提醒计划**，由后端按 `due_at` 与 `remind_start_at` 实时计算返回，不持久化；
+4. **deadline + 提醒规则（`remind_rule`）**：用户在创建/编辑任务时只表达"什么时候开始提醒"的业务意图（7 档预设之一 + 特定日期），由后端按 `due_at` 与 `remind_rule` 翻译成最终 `remind_start_at`（10 字符 `YYYY-MM-DD`）入库；不持久化 `remind_rule` 本身。从 `remind_start_at` 至 `due_at` 闭区间内每天对应一条提醒计划，由后端实时计算返回，不持久化提醒计划；
 5. **逾期自动完成**：调度器每日 00:00 检查，`due_at` 距今超过 3 天且仍为 `pending` 的任务，自动标记为 `overdue_done`。
 
 ---
@@ -28,7 +28,7 @@
 | `companies` | 新增 | id / name(uniq) / notes / created_at / updated_at |
 | `projects` | 新增 | id / company_id(FK) / name / notes / created_at / updated_at；(company_id, name) 联合唯一 |
 | `task_types` | 新增 | id / name(uniq) / created_at / updated_at |
-| `tasks` | 新增 | id / title / description / task_type_id / company_id / project_id / **`due_at`** / **`remind_start_at`** / status / created_at / updated_at / completed_at |
+| `tasks` | 新增 | id / title / description / task_type_id / company_id / project_id / **`due_at`** / **`remind_start_at`** / status / created_at / updated_at / completed_at |（`remind_rule` 只作为**入参**使用，不入库；最终值 `remind_start_at` 入库） |
 
 > **日期字段统一为 `YYYY-MM-DD` 字符串**：所有 `created_at` / `updated_at` / `due_at` / `remind_start_at` / `completed_at` 均为 10 字符定长字符串，不使用数据库原生 `DATE` / `DATETIME` 类型，便于跨数据库移植。
 >
@@ -69,13 +69,15 @@ description     Mapped[str|None]       # 描述，可空
 task_type_id    Mapped[int|None]       # FK -> task_types.id，可空
 company_id      Mapped[int]            # FK -> companies.id，必填
 project_id      Mapped[int]            # FK -> projects.id，必填
-due_at          Mapped[str]            # YYYY-MM-DD，10 字符
-remind_start_at Mapped[str]            # YYYY-MM-DD，10 字符；必须满足 remind_start_at <= due_at
+due_at          Mapped[str]            # YYYY-MM-DD，10 字符；截止日；用于计算 + 列表展示 + 逾期判断
+remind_start_at Mapped[str]            # YYYY-MM-DD，10 字符；由后端按 remind_rule + due_at 翻译出来；提醒计划起点；必须 <= due_at
 status          Mapped[str]            # pending / completed / overdue_done
 created_at      Mapped[str]            # YYYY-MM-DD，10 字符
 updated_at      Mapped[str]            # YYYY-MM-DD，10 字符
 completed_at    Mapped[str|None]       # YYYY-MM-DD，10 字符；仅 completed / overdue_done 时填充
 ```
+
+> **不存 `remind_rule`**：数据库列只有 `due_at` / `remind_start_at` 两个日期字段。`remind_rule` 是写入路径上的**业务意图**，由后端通过 `resolve_remind_start_at` 翻译为最终 `remind_start_at` 后入库；读响应（`GET`）只回 `remind_start_at`，不回 `remind_rule`。
 
 ### 提醒计划计算规则（按需计算，不存储）
 
@@ -95,6 +97,81 @@ def compute_reminders(remind_start_at: str, due_at: str) -> list[dict]:
         for i in range(days)
     ]
 ```
+
+### `remind_rule` 翻译规则（写入路径专用函数）
+
+创建 / 更新任务时，前端只传**业务意图** `remind_rule`（不传 `remind_start_at`）。后端在入库前调用下面这个**纯函数**翻译成最终日期：
+
+```python
+def resolve_remind_start_at(
+    due_at: str,
+    remind_rule: str,
+    custom_remind_start_at: str | None = None,
+) -> str:
+    """
+    根据 remind_rule 把用户的「什么时候开始提醒」翻译为具体 YYYY-MM-DD。
+    返回值必须满足 <= due_at（不满足时由调用方判 400）。
+    """
+    end = date.fromisoformat(due_at)
+    rule = REMIND_RULES[remind_rule]                  # 查表得到 (kind, value)
+    kind, value = rule
+
+    if kind == "on_due":
+        return end.isoformat()                         # 当天
+    if kind == "days_before":
+        return (end - timedelta(days=value)).isoformat()  # N 天前
+    if kind == "weeks_before":
+        return (end - timedelta(days=value * 7)).isoformat()  # 7 天为单位，写死 N×7
+    if kind == "months_before":
+        return shift_month(end, months=-value).isoformat()   # 按日历月减，目标日超过目标月末时 clamp 到月末
+    if kind == "custom":
+        if not custom_remind_start_at:
+            raise ValueError("custom 模式必须传 custom_remind_start_at")
+        return custom_remind_start_at
+
+    raise ValueError(f"unknown remind_rule: {remind_rule}")
+```
+
+#### `remind_rule` 取值与含义
+
+| 取值 | 中文 label（前端） | 翻译口径 | 入参必填 |
+|------|------|------|------|
+| `on_due` | 当天 | `remind_start_at = due_at` | — |
+| `before_1d` | 提前 1 天 | `due_at − 1 day` | — |
+| `before_2d` | 提前 2 天 | `due_at − 2 day` | — |
+| `before_3d` | 提前 3 天 | `due_at − 3 day` | — |
+| `before_1w` | 提前 1 周 | `due_at − 7 day`（**固定 7 天**，不按周历） | — |
+| `before_1m` | 提前 1 个月 | `due_at − 1 month`（**按日历月**；月末 clamp，例如 2026-03-31 → 2026-02-28） | — |
+| `custom` | 特定（用户自选） | 取 `custom_remind_start_at` | ✅ **必须传 `custom_remind_start_at`** |
+
+#### 月份偏移纯函数（用于 `before_1m`）
+
+```python
+def shift_month(d: date, months: int = -1) -> date:
+    """日历月偏移；目标日超过目标月末时 clamp 到该月最后一天。"""
+    y, m = d.year, d.month + months
+    while m <= 0:
+        m += 12
+        y -= 1
+    while m > 12:
+        m -= 12
+        y += 1
+    # 求目标月最后一天：取下月 1 日减 1 day
+    if m == 12:
+        next_month_first = date(y + 1, 1, 1)
+    else:
+        next_month_first = date(y, m + 1, 1)
+    last_day = (next_month_first - timedelta(days=1)).day
+    return date(y, m, min(d.day, last_day))
+```
+
+#### 关键不变量
+
+- 翻译后必须再次校验 `remind_start_at <= due_at`；不满足返回 400；
+- 任何规则翻译后若 `remind_start_at` 早于今天，仍允许（任务可以是历史 + 现在补登 + 后续还要在 `due_at` 当天/前几天提醒的情况），仅日志记录，不阻断；
+- 修改 `due_at` 时，**`remind_start_at` 不会自动跟着移动**：依赖调用方重新提交 `remind_rule` 或 `custom_remind_start_at`，由后端按当时的 `due_at` 重新翻译；
+- 修改 `remind_rule` 但不传 `custom_remind_start_at`（且规则非 custom） → 后端按新规则用当前 `due_at` 重新翻译；
+- 规则 `custom` 但没传 `custom_remind_start_at` → **400 阻断**。
 
 列表筛选「今天该提醒谁」之类的查询：**当前日期由 Python 层计算后作为参数传入 SQL**，不使用数据库内置函数：
 
@@ -237,17 +314,23 @@ def check_overdue_tasks(db: Session, today: str | None = None):
   "company_id": 2,
   "project_id": 5,
   "due_at": "2026-08-15",
-  "remind_start_at": "2026-08-08"
+  "remind_rule": "before_3d",
+  "custom_remind_start_at": null
 }
 ```
 
-> `remind_start_at` 也可不传，由后端按「`due_at − 1 天`」默认带入。
+> **`due_at` 与 `remind_rule` 必填**；`custom_remind_start_at` 仅在 `remind_rule='custom'` 时必传，其余情况可空。
+> 前端只在「特定」分支才让用户填日期，其余分支 UI 层不渲染日期控件，提交时把 `custom_remind_start_at` 设为 `null`。
 
 **服务端处理顺序（POST / PUT）**
-1. 校验 `due_at` / `remind_start_at` 是合法 `YYYY-MM-DD`，且 `remind_start_at <= due_at`；
-2. 校验必填字段 `company_id` / `project_id` 已传入且对应记录存在；
-3. 校验其余外键存在（`task_type_id`，可空）；
-4. 写入或更新 `tasks`（`status='pending'`）。
+1. 校验 `due_at` 是合法 `YYYY-MM-DD`；
+2. 校验 `remind_rule` 是合法枚举值（`on_due` / `before_1d` / `before_2d` / `before_3d` / `before_1w` / `before_1m` / `custom`）；
+3. 若 `remind_rule='custom'`，校验 `custom_remind_start_at` 是合法 `YYYY-MM-DD`；
+4. 调用 `resolve_remind_start_at(due_at, remind_rule, custom_remind_start_at)` 翻译出最终 `remind_start_at`；
+5. 校验翻译结果 `remind_start_at <= due_at`，否则 400；
+6. 校验必填字段 `company_id` / `project_id` 已传入且对应记录存在；
+7. 校验其余外键存在（`task_type_id`，可空）；
+8. 写入或更新 `tasks`（`status='pending'`），**只存 `remind_start_at`，不回存 `remind_rule`**。
 
 **GET /api/tasks/{id} 响应**
 ```json
@@ -258,22 +341,23 @@ def check_overdue_tasks(db: Session, today: str | None = None):
   "company":  { "id": 2, "name": "ACME 集团" },
   "project":  { "id": 5, "name": "Q3 备货" },
   "due_at": "2026-08-15",
-  "remind_start_at": "2026-08-08",
+  "remind_start_at": "2026-08-12",
   "status": "pending",
   "reminders": [
-    { "remind_at": "2026-08-08" },
-    { "remind_at": "2026-08-09" },
-    "...",
+    { "remind_at": "2026-08-12" },
+    { "remind_at": "2026-08-13" },
+    { "remind_at": "2026-08-14" },
     { "remind_at": "2026-08-15" }
   ]
 }
 ```
 
+
 ### 错误约定
 
 | HTTP | 场景 |
 |------|------|
-| 400 | `remind_start_at > due_at`；非 `YYYY-MM-DD` 格式；`company_id` / `project_id` 缺省 |
+| 400 | `due_at` / `custom_remind_start_at` 非 `YYYY-MM-DD`；`remind_rule` 非合法枚举；`remind_rule='custom'` 但 `custom_remind_start_at` 为空；翻译后 `remind_start_at > due_at`；`company_id` / `project_id` 缺省 |
 | 404 | 资源不存在 |
 | 409 | 唯一约束冲突 / 删除被引用资源 |
 | 422 | 外键无效 |
@@ -294,27 +378,45 @@ def check_overdue_tasks(db: Session, today: str | None = None):
 3. **task_types**
    - CRUD 全链路；被任务引用时删除 → 409。
 4. **tasks 字段校验**
-   - `remind_start_at > due_at` → 400；
-   - `due_at` / `remind_start_at` 非 `YYYY-MM-DD` 格式 → 400；
+   - `remind_rule` 非合法枚举 → 400；
+   - `remind_rule='custom'` 但 `custom_remind_start_at` 为空 / 非 `YYYY-MM-DD` → 400；
+   - `due_at` 非 `YYYY-MM-DD` → 400；
+   - 翻译后 `remind_start_at > due_at` → 400；
    - `company_id` 或 `project_id` 缺省 → 400；
    - 外键 `company_id` / `project_id` / `task_type_id` 不存在 → 422。
 5. **tasks CRUD**
-   - 创建成功 → `status='pending'`，`due_at` / `remind_start_at` 入库即 10 字符；
+   - 创建成功 → `status='pending'`，`remind_rule` 不入库；`remind_start_at` 入库即 10 字符（由后端翻译）；
    - 修改任意字段 → 无任何隐藏副作用；
    - 删除任务 → 任务消失，无关联数据；
-   - `complete` → 状态 `completed`，`completed_at` 写入（值为调用当天的 `YYYY-MM-DD`）。
-6. **提醒计划计算（核心）**
-   - `due_at=2026-08-15, remind_start_at=2026-08-08` → 8 条 `remind_at`：`2026-08-08 … 2026-08-15`；
-   - `due_at=2026-08-15, remind_start_at=2026-08-14` → 2 条；
-   - `due_at` 与 `remind_start_at` 同日 → 1 条；
+   - `complete` → 状态 `completed`，`completed_at` 写入（值为调用当天的 `YYYY-MM-DD`）；
+   - 响应体 **不含** `remind_rule` 字段（仅含最终 `remind_start_at`）。
+6. **`resolve_remind_start_at` 翻译（核心纯函数）**
+   - `due_at='2026-08-15'` + `remind_rule='on_due'` → `'2026-08-15'`；
+   - `due_at='2026-08-15'` + `remind_rule='before_1d'` → `'2026-08-14'`；
+   - `due_at='2026-08-15'` + `remind_rule='before_3d'` → `'2026-08-12'`；
+   - `due_at='2026-08-15'` + `remind_rule='before_1w'` → `'2026-08-08'`（固定 7 天，不按周历）；
+   - `due_at='2026-08-31'` + `remind_rule='before_1m'` → `'2026-07-31'`（按日历月减 1 月）；
+   - `due_at='2026-03-31'` + `remind_rule='before_1m'` → `'2026-02-28'`（平年 clamp 到月末）；
+   - `due_at='2024-03-31'` + `remind_rule='before_1m'` → `'2024-02-29'`（2024 是闰年，clamp 到月末）；
+   - `due_at='2026-08-15'` + `remind_rule='custom'` + `custom_remind_start_at='2026-08-10'` → `'2026-08-10'`；
+   - `due_at='2026-08-15'` + `remind_rule='custom'` + 缺 `custom_remind_start_at` → 抛 `ValueError`（由路由层捕获并返 400）。
+7. **提醒计划计算（核心）**
+   - 入库 `due_at=2026-08-15, remind_start_at=2026-08-12` → `reminders` 4 条：`2026-08-12 … 2026-08-15`；
+   - 入库 `due_at=2026-08-15, remind_start_at=2026-08-14` → 2 条；
+   - 入库 `due_at` 与 `remind_start_at` 同日 → 1 条；
    - `GET /api/tasks/{id}` 返回的 `reminders` 数组与实时计算结果一致；
-   - 修改 `due_at` 或 `remind_start_at` 后再次 `GET`，`reminders` 立即反映新计划。
-7. **列表筛选 `remind_today=true`**
+   - PUT 修改 `due_at` 后再次 `GET`，`reminders` 立即反映新计划（注意：后端不会自动重算 `remind_start_at`，除非前端重新提交 `remind_rule`）。
+8. **入参 → 入库端到端**
+   - `POST /api/tasks` body `{due_at:'2026-08-15', remind_rule:'before_1m', ...}` → 入库 `remind_start_at='2026-07-15'`；
+   - `POST` body 漏 `remind_rule` → 400；
+   - `POST` body `remind_rule='on_due'` + `due_at='2026-08-15'` → 入库 `remind_start_at='2026-08-15'`；
+   - 编辑表单（前端 §2.5）通过 `due_at` + `remind_start_at` 反推 `remind_rule`（`on_due`/`before_1d`/…/`custom`）不匹配时 → 提交时 `custom_remind_start_at` 必须带具体日期，不能为 `null`。
+9. **列表筛选 `remind_today=true`**
    - 测试通过 monkeypatch 注入 `today='2026-08-10'`，`remind_today=true` 时返回所有 `status='pending'` 且 `remind_start_at <= 2026-08-10 <= due_at` 的任务；
    - `status='completed'` / `'overdue_done'` 的任务被自动排除；
    - `remind_start_at > today` 或 `due_at < today` 的任务被排除；
    - **SQL 文本中不出现 `CURDATE()` / `NOW()` / `CURRENT_DATE` 等数据库函数**。
-8. **逾期自动完成 Job `check_overdue_tasks`**
+10. **逾期自动完成 Job `check_overdue_tasks`**
    - 直接调用 `check_overdue_tasks(db, today='2026-08-15')`：任务 `due_at=2026-08-10` 且 `status='pending'` → 被标记 `overdue_done`，`completed_at='2026-08-15'`；
    - 任务 `due_at='2026-08-13'` 且 `status='pending'` → 不被处理（仅 2 天）；
    - 状态已是 `completed` / `overdue_done` → 不重复处理；
@@ -329,11 +431,13 @@ def check_overdue_tasks(db: Session, today: str | None = None):
 2. **不设独立 teams 表**：本规格不设计「所属团队」字段；
 3. **所有日期字段统一为 10 字符字符串 `YYYY-MM-DD`**：`due_at` / `remind_start_at` / `created_at` / `updated_at` / `completed_at` 均不入数据库原生 `DATE` / `DATETIME` 类型；
 4. **数据库可移植性**：所有 SQL 中涉及「当前日期 / 时间」的位置均由 Python 层 `date.today().isoformat()` 计算后作为命名参数（`:today` / `:cutoff` 等）传入；不依赖 `CURDATE()` / `NOW()` / `CURRENT_DATE` / `GETDATE()` 等数据库内置函数，避免切换数据库（MySQL / PostgreSQL / SQLite 等）时函数名差异导致报错；
-5. **`remind_start_at` 步长固定为 1 天**：从 `remind_start_at` 到 `due_at` 闭区间内每日一条；不支持小时级粒度（v0.2 演进项）；
-6. **「deadline 当天」算一次提醒**：闭区间包含 `due_at`；`remind_start_at = due_at` 时生成 1 条；
-7. **修改任务零副作用**：修改 `due_at` / `remind_start_at` 后，下次查询自然反映新值，无需任何后台重建；
-8. **删除公司 / 任务类型采用「软阻断」**：被引用时返回 409；
-9. **APScheduler 仅一个 Job**：每日 00:00 跑 `check_overdue_tasks`；签名接受 `today` 参数便于测试注入；
-10. **状态机**：`pending → completed`（用户主动）、`pending → overdue_done`（自动）；两者不互通；不提供 reopen；
-11. **提醒计划实时计算，不持久化**：每次 `GET /api/tasks/{id}` 由后端按 `due_at` 与 `remind_start_at` 实时生成 `reminders` 数组，列表接口可通过 `?remind_today=true` 用 SQL 筛选「今日待提醒」；不存在 `notifications` 表；
-12. **任务创建时 `company_id` / `project_id` 必填**：本版本不维护「用户所属」默认值，由调用方在新建任务时显式传入。
+5. **`remind_rule` 7 档预设**：`on_due` / `before_1d` / `before_2d` / `before_3d` / `before_1w` / `before_1m` / `custom`；其中 `before_1w` 固定 7 天，`before_1m` 按日历月（目标日超过目标月末时 clamp 到该月最后一天）；`custom` 必须配 `custom_remind_start_at`；不存数据库，仅写入路径上翻译用；
+6. **`remind_start_at` 步长固定为 1 天**：从 `remind_start_at` 到 `due_at` 闭区间内每日一条；不支持小时级粒度（v0.2 演进项）；
+7. **「deadline 当天」算一次提醒**：闭区间包含 `due_at`；`remind_start_at = due_at` 时生成 1 条；
+8. **修改任务零副作用**：修改 `due_at` 后，后端**不会**自动重算 `remind_start_at`——重算依赖调用方重新提交 `remind_rule` 或 `custom_remind_start_at`；remind_start_at 在 PUT 后下次查询自然反映新值；
+9. **删除公司 / 任务类型采用「软阻断」**：被引用时返回 409；
+10. **APScheduler 仅一个 Job**：每日 00:00 跑 `check_overdue_tasks`；签名接受 `today` 参数便于测试注入；
+11. **状态机**：`pending → completed`（用户主动）、`pending → overdue_done`（自动）；两者不互通；不提供 reopen；
+12. **提醒计划实时计算，不持久化**：每次 `GET /api/tasks/{id}` 由后端按 `due_at` 与 `remind_start_at` 实时生成 `reminders` 数组，列表接口可通过 `?remind_today=true` 用 SQL 筛选「今日待提醒」；不存在 `notifications` 表；
+13. **任务创建时 `company_id` / `project_id` 必填**：本版本不维护「用户所属」默认值，由调用方在新建任务时显式传入；
+14. **编辑模式反推 `remind_rule`**：GET 响应不含 `remind_rule`，前端编辑打开时按 `(due_at − remind_start_at)` 反推最近匹配（`on_due`/`before_1d`/…/`custom`）；反推失败的边缘情况一律归为 `custom`，UI 必须显示具体日期输入框（不得静默归为某档预设），由用户主动确认。
