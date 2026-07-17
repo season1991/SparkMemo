@@ -5,6 +5,9 @@
 import { defineStore } from 'pinia'
 import * as api from '../api/tasks.js'
 
+// 重新导出反推工具，方便上层（TaskForm.vue 等）直接从 store 引用。
+export { inferRemindRule, previewRemindStartAt } from '../utils/remindRule.js'
+
 export const useTaskStore = defineStore('task', {
   state: () => ({
     tasks: [],

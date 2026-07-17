@@ -1,8 +1,13 @@
 <script setup>
 /**
  * 任务表单组件：抽屉承载，mode='create' | 'edit'。
- * 字段：title / description / task_type_id / company_id / project_id / due_at / remind_start_at。
- * 公司 → 项目下拉联动；due_at 改变时 remind_start_at 默认 = due_at - 1 天。
+ *
+ * 字段：title / description / task_type_id / company_id / project_id /
+ *       due_at / remind_rule (7 档) / custom_remind_start_at (仅 custom 时)。
+ *
+ * 公司 → 项目下拉联动；due_at 改变时按 remind_rule 联动刷新。
+ * 编辑模式从后端 remind_start_at 反推 remind_rule（utils/inferRemindRule）。
+ *
  * 422 字段错误按 detail[].loc 映射回表单字段红字。
  */
 import { ref, reactive, computed, watch, onMounted } from 'vue'
@@ -12,6 +17,12 @@ import { useCompanyStore } from '../stores/useCompanyStore.js'
 import { useProjectStore } from '../stores/useProjectStore.js'
 import { useTaskStore } from '../stores/useTaskStore.js'
 import { ApiError, showApiError } from '../api/client.js'
+import {
+  REMIND_RULE_OPTIONS,
+  DEFAULT_REMIND_RULE,
+  inferRemindRule,
+  validateCustom
+} from '../utils/remindRule.js'
 import ReminderChips from './ReminderChips.vue'
 
 const props = defineProps({
@@ -35,13 +46,6 @@ const today = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-const subtractDay = (yyyy_mm_dd, days = 1) => {
-  const [y, m, d] = yyyy_mm_dd.split('-').map(Number)
-  const dt = new Date(y, m - 1, d)
-  dt.setDate(dt.getDate() - days)
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-}
-
 const form = reactive({
   title: '',
   description: '',
@@ -49,8 +53,17 @@ const form = reactive({
   company_id: null,
   project_id: null,
   due_at: today(),
-  remind_start_at: subtractDay(today(), 1)
+  // 7 档提醒规则之一；UI 默认「当天」
+  remind_rule: DEFAULT_REMIND_RULE,
+  // 仅 remind_rule === 'custom' 时使用；其余置 null
+  custom_remind_start_at: null
 })
+
+const customValidate = (_rule, value, cb) => {
+  if (form.remind_rule !== 'custom') return cb()
+  const msg = validateCustom(form.due_at, form.remind_rule, value)
+  return msg ? cb(new Error(msg)) : cb()
+}
 
 const rules = {
   title: [
@@ -61,15 +74,16 @@ const rules = {
   company_id: [{ required: true, message: '请选择公司', trigger: 'change' }],
   project_id: [{ required: true, message: '请选择项目', trigger: 'change' }],
   due_at: [{ required: true, message: '请选择截止日', trigger: 'change' }],
-  remind_start_at: [
+  remind_rule: [
     {
-      validator: (rule, value, cb) => {
-        if (!value) return cb()
-        if (form.due_at && value > form.due_at) {
-          return cb(new Error('提醒起必须早于或等于截止日'))
-        }
-        cb()
-      },
+      required: true,
+      message: '请选择提前提醒',
+      trigger: 'change'
+    }
+  ],
+  custom_remind_start_at: [
+    {
+      validator: customValidate,
       trigger: 'change'
     }
   ]
@@ -82,6 +96,8 @@ const visible = computed({
 
 const isEdit = computed(() => props.mode === 'edit')
 const title = computed(() => (isEdit.value ? '编辑任务' : '新建任务'))
+
+const isCustomRule = computed(() => form.remind_rule === 'custom')
 
 const availableProjects = computed(() => {
   if (!form.company_id) return []
@@ -137,7 +153,11 @@ async function loadFromTask(t) {
   form.company_id = t.company ? t.company.id : null
   form.project_id = t.project ? t.project.id : null
   form.due_at = t.due_at || today()
-  form.remind_start_at = t.remind_start_at || subtractDay(form.due_at, 1)
+
+  // 反推 remind_rule（编辑模式必走）
+  const inferred = inferRemindRule(t.due_at, t.remind_start_at)
+  form.remind_rule = inferred
+  form.custom_remind_start_at = inferred === 'custom' ? (t.remind_start_at || null) : null
 }
 
 function resetForm() {
@@ -147,7 +167,8 @@ function resetForm() {
   form.company_id = null
   form.project_id = null
   form.due_at = today()
-  form.remind_start_at = subtractDay(form.due_at, 1)
+  form.remind_rule = DEFAULT_REMIND_RULE
+  form.custom_remind_start_at = null
 }
 
 const fieldErrors = reactive({})
@@ -181,11 +202,33 @@ async function handleCompanyChange(val) {
   }
 }
 
+/**
+ * 截止日变化：
+ * - 预设档（on_due / before_Nd / before_1w / before_1m）：保持 remind_rule，本端不预填具体 remind_start_at
+ *   （后端在下次提交时按新 due_at + remind_rule 重新翻译）。
+ * - custom：保持 custom_remind_start_at 不变；但若新 due_at < custom_remind_start_at，给红字 + 禁用保存。
+ */
 function handleDueAtChange(val) {
   if (!val) return
-  const expected = subtractDay(val, 1)
-  if (!form.remind_start_at || form.remind_start_at === subtractDay(form.due_at, 1)) {
-    form.remind_start_at = expected
+  if (form.remind_rule === 'custom' && form.custom_remind_start_at) {
+    if (val < form.custom_remind_start_at) {
+      fieldErrors.custom_remind_start_at = '开始提醒日期晚于截止日'
+      formRef.value?.validateField('custom_remind_start_at')
+    } else if (fieldErrors.custom_remind_start_at) {
+      delete fieldErrors.custom_remind_start_at
+      formRef.value?.clearValidate('custom_remind_start_at')
+    }
+  }
+}
+
+function handleRemindRuleChange(val) {
+  // 切换非 custom：清空 custom_remind_start_at
+  if (val !== 'custom') {
+    form.custom_remind_start_at = null
+    if (fieldErrors.custom_remind_start_at) {
+      delete fieldErrors.custom_remind_start_at
+      formRef.value?.clearValidate('custom_remind_start_at')
+    }
   }
 }
 
@@ -214,6 +257,16 @@ async function handleSubmit() {
   } catch {
     return
   }
+
+  // 校验：custom 模式必须 custom_remind_start_at <= due_at
+  const customErr = validateCustom(form.due_at, form.remind_rule, form.custom_remind_start_at)
+  if (customErr) {
+    fieldErrors.custom_remind_start_at = customErr
+    ElMessage.error(customErr)
+    return
+  }
+
+  // 提交到后端的 payload：remind_rule + 可空 custom_remind_start_at；不再有 remind_start_at
   const payload = {
     title: form.title.trim(),
     description: form.description.trim() || null,
@@ -221,7 +274,9 @@ async function handleSubmit() {
     company_id: form.company_id,
     project_id: form.project_id,
     due_at: form.due_at,
-    remind_start_at: form.remind_start_at || null
+    remind_rule: form.remind_rule,
+    custom_remind_start_at:
+      form.remind_rule === 'custom' ? form.custom_remind_start_at : null
   }
   submitting.value = true
   try {
@@ -274,7 +329,12 @@ function fieldError(name) {
       label-position="right"
     >
       <el-form-item label="标题" prop="title" :error="fieldError('title')">
-        <el-input v-model="form.title" placeholder="请输入任务标题" maxlength="200" show-word-limit />
+        <el-input
+          v-model="form.title"
+          placeholder="请输入任务标题"
+          maxlength="200"
+          show-word-limit
+        />
       </el-form-item>
 
       <el-form-item label="描述" prop="description" :error="fieldError('description')">
@@ -342,12 +402,33 @@ function fieldError(name) {
         />
       </el-form-item>
 
-      <el-form-item label="提醒起" prop="remind_start_at" :error="fieldError('remind_start_at')">
+      <el-form-item label="提前提醒" prop="remind_rule" :error="fieldError('remind_rule')">
+        <el-select
+          v-model="form.remind_rule"
+          placeholder="选择提前提醒"
+          style="width: 100%"
+          @change="handleRemindRuleChange"
+        >
+          <el-option
+            v-for="opt in REMIND_RULE_OPTIONS"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+      </el-form-item>
+
+      <el-form-item
+        v-if="isCustomRule"
+        label="特定日期"
+        prop="custom_remind_start_at"
+        :error="fieldError('custom_remind_start_at')"
+      >
         <el-date-picker
-          v-model="form.remind_start_at"
+          v-model="form.custom_remind_start_at"
           type="date"
           value-format="YYYY-MM-DD"
-          placeholder="默认为截止日前 1 天"
+          placeholder="选择特定提醒日期"
           style="width: 100%"
         />
       </el-form-item>

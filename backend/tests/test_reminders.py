@@ -9,7 +9,7 @@ def _items(response):
     return body
 
 
-# 构造任务提醒相关接口的默认请求体，保持公司、项目和日期字段符合 spec 示例。
+# 构造任务提醒相关接口的默认请求体，新 spec 用 remind_rule 入参。
 def _task_payload(company_id, project_id, **values):
     payload = {
         "title": "提醒任务",
@@ -17,7 +17,8 @@ def _task_payload(company_id, project_id, **values):
         "company_id": company_id,
         "project_id": project_id,
         "due_at": "2026-08-15",
-        "remind_start_at": "2026-08-08",
+        "remind_rule": "before_1d",
+        "custom_remind_start_at": None,
     }
     payload.update(values)
     return payload
@@ -81,7 +82,7 @@ async def test_get_task_includes_reminders(
     ]
 
 
-# 验证修改 due_at 或 remind_start_at 后无需重建提醒数据，下一次详情查询立即反映两天新计划。
+# 验证修改 due_at + remind_rule 后无需重建提醒数据，下一次详情查询立即反映新计划。
 async def test_update_task_reminders_reflect_new_plan(
     client,
     make_company,
@@ -99,6 +100,7 @@ async def test_update_task_reminders_reflect_new_plan(
         remind_start_at="2026-08-08",
     )
 
+    # PUT 改为 before_1d → 后端翻译为 remind_start_at=2026-08-14
     update = await client.put(
         f"/api/tasks/{task.id}",
         json=_task_payload(
@@ -106,13 +108,16 @@ async def test_update_task_reminders_reflect_new_plan(
             project.id,
             title=task.title,
             due_at="2026-08-15",
-            remind_start_at="2026-08-14",
+            remind_rule="before_1d",
+            custom_remind_start_at=None,
         ),
     )
     detail = await client.get(f"/api/tasks/{task.id}")
 
     assert update.status_code == 200
     assert detail.status_code == 200
+    assert detail.json()["due_at"] == "2026-08-15"
+    assert detail.json()["remind_start_at"] == "2026-08-14"
     assert detail.json()["reminders"] == [
         {"remind_at": "2026-08-14"},
         {"remind_at": "2026-08-15"},

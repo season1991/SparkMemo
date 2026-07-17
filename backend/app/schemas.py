@@ -1,6 +1,6 @@
 # SparkMemo Pydantic 模式
 from datetime import date as _date
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -14,6 +14,18 @@ def _validate_yyyy_mm_dd(value: Optional[str], field_name: str) -> Optional[str]
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be YYYY-MM-DD") from exc
     return value
+
+
+# 提醒规则枚举（与后端 spec RemindRule / OpenAPI RemindRule schema 对齐）
+RemindRule = Literal[
+    "on_due",
+    "before_1d",
+    "before_2d",
+    "before_3d",
+    "before_1w",
+    "before_1m",
+    "custom",
+]
 
 
 class CompanyBase(BaseModel):
@@ -123,35 +135,14 @@ class TaskTypeRead(TaskTypeBase):
     updated_at: str
 
 
-class TaskBase(BaseModel):
-    """任务基础字段：title 必填，日期字段由 field_validator 校验 YYYY-MM-DD。"""
+class TaskCreate(BaseModel):
+    """创建任务请求体。
 
-    title: str
-    description: Optional[str] = None
-    task_type_id: Optional[int] = None
-    due_at: str
-    remind_start_at: Optional[str] = None
-
-    @field_validator("due_at")
-    @classmethod
-    def _check_due_at(cls, value: str) -> str:
-        return _validate_yyyy_mm_dd(value, "due_at")
-
-    @field_validator("remind_start_at")
-    @classmethod
-    def _check_remind_start_at(cls, value: Optional[str]) -> Optional[str]:
-        return _validate_yyyy_mm_dd(value, "remind_start_at")
-
-
-class TaskCreate(TaskBase):
-    """创建任务请求体：company_id/project_id 由端点层校验，缺失返回 400。"""
-
-    company_id: Optional[int] = None
-    project_id: Optional[int] = None
-
-
-class TaskUpdate(BaseModel):
-    """更新任务请求体：全量替换字段，日期字段由 field_validator 校验。"""
+    入参使用业务意图 remind_rule（不允许直接传 remind_start_at）：
+    - on_due / before_1d / before_2d / before_3d / before_1w / before_1m：
+      custom_remind_start_at 设为 None；后端按 due_at 翻译出最终 remind_start_at；
+    - custom：custom_remind_start_at 必填（YYYY-MM-DD）；后端原文使用。
+    """
 
     title: str
     description: Optional[str] = None
@@ -159,17 +150,24 @@ class TaskUpdate(BaseModel):
     company_id: int
     project_id: int
     due_at: str
-    remind_start_at: str
+    remind_rule: RemindRule
+    custom_remind_start_at: Optional[str] = None
 
     @field_validator("due_at")
     @classmethod
     def _check_due_at(cls, value: str) -> str:
         return _validate_yyyy_mm_dd(value, "due_at")
 
-    @field_validator("remind_start_at")
+    @field_validator("custom_remind_start_at")
     @classmethod
-    def _check_remind_start_at(cls, value: str) -> str:
-        return _validate_yyyy_mm_dd(value, "remind_start_at")
+    def _check_custom_remind(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_yyyy_mm_dd(value, "custom_remind_start_at")
+
+
+class TaskUpdate(TaskCreate):
+    """更新任务请求体：与 TaskCreate 字段一致；remind_start_at 不直接接收。"""
+
+    pass
 
 
 class TaskTypeRef(BaseModel):
@@ -206,7 +204,10 @@ class ReminderItem(BaseModel):
 
 
 class TaskRead(BaseModel):
-    """任务响应体：包含外键引用对象和实时计算的提醒计划。"""
+    """任务响应体：包含外键引用对象和实时计算的提醒计划。
+
+    注：响应只回 remind_start_at（最终日期），不回 remind_rule（业务意图不入库）。
+    """
 
     model_config = ConfigDict(from_attributes=True)
 

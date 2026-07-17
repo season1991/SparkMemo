@@ -4,56 +4,28 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 
-from app import crud, models
+from app import crud, models, schemas
 from app.deps import get_db
-from app.schemas import TaskListResponse
+from app.services.reminders import resolve_remind_start_at
 from app.services.scheduler import get_today
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
-def _validate_create_payload(data: dict) -> tuple[dict, Optional[str]]:
-    """校验任务创建请求体，返回 (cleaned_data, error_key)。"""
-    company_id = data.get("company_id")
-    project_id = data.get("project_id")
-    due_at = data.get("due_at")
-
-    if company_id is None:
-        return {}, "company_id_missing"
-    if project_id is None:
-        return {}, "project_id_missing"
-    if not due_at:
-        return {}, "due_at_missing"
-    return {
-        "title": data.get("title"),
-        "description": data.get("description"),
-        "task_type_id": data.get("task_type_id"),
-        "company_id": company_id,
-        "project_id": project_id,
-        "due_at": due_at,
-        "remind_start_at": data.get("remind_start_at"),
-    }, None
+def _translate_or_400(payload: schemas.TaskCreate | schemas.TaskUpdate) -> str:
+    """调用 resolve_remind_start_at 翻译 remind_rule；捕获 ValueError 转 400。"""
+    try:
+        return resolve_remind_start_at(
+            due_at=payload.due_at,
+            remind_rule=payload.remind_rule,
+            custom_remind_start_at=payload.custom_remind_start_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
-def _validate_update_payload(data: dict) -> tuple[dict, Optional[str]]:
-    """校验任务更新请求体，返回 (cleaned_data, error_key)。"""
-    due_at = data.get("due_at")
-    remind_start_at = data.get("remind_start_at")
-    if not due_at or not remind_start_at:
-        return {}, "due_at_or_remind_start_missing"
-    return {
-        "title": data.get("title"),
-        "description": data.get("description"),
-        "task_type_id": data.get("task_type_id"),
-        "company_id": data.get("company_id"),
-        "project_id": data.get("project_id"),
-        "due_at": due_at,
-        "remind_start_at": remind_start_at,
-    }, None
-
-
-@router.get("", response_model=TaskListResponse)
+@router.get("", response_model=schemas.TaskListResponse)
 def list_tasks(
     status: Optional[str] = Query(None),
     company_id: Optional[int] = Query(None),
@@ -93,28 +65,30 @@ def list_tasks(
 
 
 @router.post("", status_code=201)
-def create_task(payload: dict, db=Depends(get_db)):
-    """创建任务，含必填校验、日期校验和外键校验。"""
-    cleaned, err = _validate_create_payload(payload)
-    if err == "company_id_missing":
-        raise HTTPException(status_code=400, detail="company_id is required")
-    if err == "project_id_missing":
-        raise HTTPException(status_code=400, detail="project_id is required")
-    if err == "due_at_missing":
-        raise HTTPException(status_code=400, detail="due_at is required")
+def create_task(payload: schemas.TaskCreate, db=Depends(get_db)):
+    """创建任务：校验必填 + 翻译 remind_rule -> remind_start_at + 外键存在性。"""
+    # remind_rule 字段已由 Pydantic Literal 校验；这里再翻译
+    resolved_start_at = _translate_or_400(payload)
 
-    if db.get(models.Company, cleaned["company_id"]) is None:
+    if db.get(models.Company, payload.company_id) is None:
         raise HTTPException(status_code=422, detail="company_id does not exist")
-    if db.get(models.Project, cleaned["project_id"]) is None:
+    if db.get(models.Project, payload.project_id) is None:
         raise HTTPException(status_code=422, detail="project_id does not exist")
-    if cleaned["task_type_id"] is not None:
-        if db.get(models.TaskType, cleaned["task_type_id"]) is None:
+    if payload.task_type_id is not None:
+        if db.get(models.TaskType, payload.task_type_id) is None:
             raise HTTPException(status_code=422, detail="task_type_id does not exist")
 
     try:
-        task = crud.task.create_task(db, **cleaned)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        task = crud.task.create_task(
+            db,
+            title=payload.title,
+            description=payload.description,
+            task_type_id=payload.task_type_id,
+            company_id=payload.company_id,
+            project_id=payload.project_id,
+            due_at=payload.due_at,
+            remind_start_at=resolved_start_at,
+        )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="task creation failed")
     return crud.task.build_task_read(task)
@@ -130,28 +104,34 @@ def get_task(task_id: int, db=Depends(get_db)):
 
 
 @router.put("/{task_id}")
-def update_task(task_id: int, payload: dict, db=Depends(get_db)):
-    """更新任务全部字段，保持 status 和 completed_at 不被隐式修改。"""
-    cleaned, err = _validate_update_payload(payload)
-    if err == "due_at_or_remind_start_missing":
-        raise HTTPException(status_code=400, detail="due_at and remind_start_at are required")
+def update_task(task_id: int, payload: schemas.TaskUpdate, db=Depends(get_db)):
+    """更新任务全部字段；remind_rule + due_at 一并提交后由后端翻译回 remind_start_at。"""
+    resolved_start_at = _translate_or_400(payload)
 
     existing = crud.task.get_task(db, task_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="task not found")
 
-    if db.get(models.Company, cleaned["company_id"]) is None:
+    if db.get(models.Company, payload.company_id) is None:
         raise HTTPException(status_code=422, detail="company_id does not exist")
-    if db.get(models.Project, cleaned["project_id"]) is None:
+    if db.get(models.Project, payload.project_id) is None:
         raise HTTPException(status_code=422, detail="project_id does not exist")
-    if cleaned["task_type_id"] is not None:
-        if db.get(models.TaskType, cleaned["task_type_id"]) is None:
+    if payload.task_type_id is not None:
+        if db.get(models.TaskType, payload.task_type_id) is None:
             raise HTTPException(status_code=422, detail="task_type_id does not exist")
 
     try:
-        task = crud.task.update_task(db, task_id, **cleaned)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        task = crud.task.update_task(
+            db,
+            task_id,
+            title=payload.title,
+            description=payload.description,
+            task_type_id=payload.task_type_id,
+            company_id=payload.company_id,
+            project_id=payload.project_id,
+            due_at=payload.due_at,
+            remind_start_at=resolved_start_at,
+        )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="task update failed")
     return crud.task.build_task_read(task)

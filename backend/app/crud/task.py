@@ -1,5 +1,5 @@
 # 任务 CRUD 操作
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import and_, func, select
@@ -17,17 +17,6 @@ def _validate_date(value: str, field: str) -> str:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be YYYY-MM-DD") from exc
     return value
-
-
-def _resolve_remind_start(due_at: str, remind_start_at: Optional[str]) -> str:
-    """校验日期格式并解析 remind_start_at，缺省取 due_at - 1 天。"""
-    due_value = _validate_date(due_at, "due_at")
-    if remind_start_at is None:
-        return (date.fromisoformat(due_value) - timedelta(days=1)).isoformat()
-    start_value = _validate_date(remind_start_at, "remind_start_at")
-    if start_value > due_value:
-        raise ValueError("remind_start_at must be <= due_at")
-    return start_value
 
 
 def list_tasks(
@@ -115,10 +104,15 @@ def create_task(
     company_id: int,
     project_id: int,
     due_at: str,
-    remind_start_at: Optional[str],
+    remind_start_at: str,
 ) -> models.Task:
-    """创建任务，自动处理 remind_start_at 缺省和日期校验。"""
-    resolved_start = _resolve_remind_start(due_at, remind_start_at)
+    """创建任务；remind_start_at 已由路由层按 remind_rule 翻译后传入。"""
+    # 兜底校验日期格式，错误直接抛 ValueError（路由层捕获转 400）
+    _validate_date(due_at, "due_at")
+    _validate_date(remind_start_at, "remind_start_at")
+    if remind_start_at > due_at:
+        raise ValueError("remind_start_at must be <= due_at")
+
     task = models.Task(
         title=title,
         description=description,
@@ -126,7 +120,7 @@ def create_task(
         company_id=company_id,
         project_id=project_id,
         due_at=due_at,
-        remind_start_at=resolved_start,
+        remind_start_at=remind_start_at,
         status="pending",
     )
     db.add(task)
@@ -151,18 +145,22 @@ def update_task(
     due_at: str,
     remind_start_at: str,
 ) -> Optional[models.Task]:
-    """更新任务全部字段，保持 status 和 completed_at 不被隐式修改。"""
+    """更新任务全部字段；remind_start_at 已由路由层按 remind_rule 翻译后传入。"""
     task = db.get(models.Task, task_id)
     if task is None:
         return None
-    resolved_start = _resolve_remind_start(due_at, remind_start_at)
+    _validate_date(due_at, "due_at")
+    _validate_date(remind_start_at, "remind_start_at")
+    if remind_start_at > due_at:
+        raise ValueError("remind_start_at must be <= due_at")
+
     task.title = title
     task.description = description
     task.task_type_id = task_type_id
     task.company_id = company_id
     task.project_id = project_id
     task.due_at = due_at
-    task.remind_start_at = resolved_start
+    task.remind_start_at = remind_start_at
     try:
         db.commit()
     except IntegrityError:
