@@ -63,12 +63,14 @@
         │   N == 0 → el-text type="info"  灰色不点击 │
         └────────────────────────────────────────────┘
         ┌─ 公司表 ───────────────────────────────────┐
-        │ <el-table :data="store.companies" stripe>  │
-        │   列：                                     │
-        │     公司 (link，可点击整行)                │
-        │     紧急 / 临期 / 尚早 / 合计 (4 列)        │
-        │   行点击公司名 / 数字格 → router.push(…)   │
-        │   = 0 数字：el-text type="info" 灰色       │
+        │ <el-table                                │
+        │     @row-click="onRowClick"               │
+        │     row-class-name 标识可点击 hover 高亮>  │
+        │   列：公司 / 紧急 / 临期 / 尚早 / 合计    │
+        │   整行任意位置点击 → router.push(         │
+        │     /tasks?company_id={company_id})       │
+        │   数字 > 0: 主色（非链接，仅视觉强调）    │
+        │   数字 = 0: 灰色 el-text                  │
         └────────────────────────────────────────────┘
         ┌─ 空态（仅 summary.total === 0） ──────────┐
         │ ✨ 今日无事                                │
@@ -158,23 +160,56 @@
 ### 2.3 功能点：钻取到任务列表（coarse-grained）
 
 #### 入口
-点击 summary 卡片数字（`> 0`）或公司表行中数字（`> 0`）。
+- summary 卡片数字（`> 0`）点击；
+- 公司表**整行任意位置**点击（最简化交互）。
 
-#### 跳转规则（v0.1 受 API 限制仅 coarse-grained）
+#### 跳转规则
 
 | 点击位置 | 跳转到 | 说明 |
 |---------|-------|------|
 | summary「紧急 N」「临期 N」「尚早 N」（N > 0） | `/tasks?status=pending` | 全局待办 |
-| summary「合计 N」（N > 0） | `/tasks?remind_today=true` | 全局提醒区间内的任务 |
-| 公司表「公司名」 | `/tasks?company_id={company_id}` | 该公司全部任务 |
-| 公司表某行某格 `urgent / due_soon / early > 0` | `/tasks?company_id={company_id}&status=pending` | 该公司待办 |
+| summary「合计 N」（N > 0） | `/tasks?remind_today=true` | 全局提醒区间内任务 |
+| 公司表**整行任意位置**（row-click） | `/tasks?company_id={company_id}` | 该公司全部任务 |
+| 公司表内任何单元格 / 公司名 / 数字格 | 同上：整行行为统一 | 不再有「数字 → 公司+pending」分支 |
 
-#### 不可点击项
-- 数字 `= 0` 时为灰色 `el-text type="info"`，无 hover 态与 click 监听；
-- summary 卡片 / 公司名 cell 在加载中或空态时不可点击。
+#### 不再有的旧行为
+- ~~公司行某格 `> 0` → `/tasks?company_id={id}&status=pending`~~
+- 这一钻取分支已合并到「整行 → company_id」，与 coarse-grained 简化方案一致。
+
+#### 视觉提示
+- 公司表行 `cursor: pointer`，hover 时整行染上 Element Plus 主色浅背景（`--el-fill-color-light`）；
+- 公司名 cell 仍是主色文本，但**仅是视觉强调，不响应点击**（点击会冒泡到行）；
+- 数字 `> 0` 时仍是主色，`= 0` 时灰色 `el-text` —— 都是文本，不再是 link。
 
 #### Coarse-grained 限制说明
-> 任务列表 API `/api/tasks` 当前不区分「紧急 / 临期 / 尚早」三档语义。点击公司表中某一格的实际结果，是「该公司全部待办」，而非严格的「紧急 3 条」子集。本 spec 显式记录此限制，**v0.2 由后端扩展 `/api/tasks?bucket=urgent|due_soon|early` 参数**，配合本前端实现严格三档钻取。
+> 任务列表 API `/api/tasks` 当前不区分「紧急 / 临期 / 尚早」三档语义。本 spec 内的钻取粒度最大为「该公司全部任务」或「全局待办 / 全局提醒」，不展示严格三档子集。**v0.2 由后端扩展 `/api/tasks?bucket=urgent|due_soon|early` 参数**，配合本前端做精细化筛选。
+
+#### URL Query → filters 的消费契约（**关键，遗漏会导致筛选失效**）
+
+跳转 URL 是表达「筛选意图」的唯一通道，TaskList 视图**必须**消费 `route.query` 并写回 `taskStore.filters`：
+
+| Query 字段 | 落到 `taskStore.filters` | 类型 | 默认 |
+|-----------|-------------------------|------|------|
+| `company_id` | `filters.company_id` | `number \| null` | `null` |
+| `project_id` | `filters.project_id` | `number \| null` | `null` |
+| `task_type_id` | `filters.task_type_id` | `number \| null` | `null` |
+| `status` | `filters.status` | `string` | `''` |
+| `remind_today` | `filters.remind_today` | `boolean` | 见下 |
+
+消费时机（**两处都要**）：
+
+1. **`onMounted` 时**：组件挂载完成后立即读取 `route.query` 全量写回 store，然后 `fetchList()`；
+2. **`watch(() => route.query)`**：当 query 变化（包括 user 在 filter UI 中触发的路由跳转、或外部 dashboard 钻取），再次把 query 写回 store 后 `fetchList()`。
+
+行为约束：
+
+- **query 全量接管**：从 query 写回的字段视为本次会话的初始 filters；用户后续手动修改下拉框时**不再回写 URL**（v0.1 故意不做双向，避免循环依赖；后续 v0.2 可加）；
+- **`remind_today` 由 `meta.remindToday` 与 `query.remind_today` 共同决定**：只要任一为 `true / 'true'` 即视为开启；这是 dashboard summary「合计 → `?remind_today=true`」能正确生效的必要条件；
+- **副作用**：当 `query.company_id` 改动时，`query.project_id` 与 `store.filters.project_id` 自动置空（与现有 `onCompanyFilterChange` 同语义），避免旧项目 id 跨公司残留；
+- **page 重置**：query 变化时 `filters.page = 1`，避免翻页状态跨场景残留；
+- **空值约定**：query 字段缺省 / 为空字符串 / 为 `null` 时视为未传，落到 filter 的默认值（`null` / `''` / `false`）。
+
+> **未实现的边界**（v0.2 再议）：dashboard 钻取时 query 不携带 `due_from` / `due_to` / `keyword` / `page` / `size`；这些仍由用户在 TaskList 内手动控制。
 
 ### 2.4 功能点：空态（`summary.total === 0`）
 
@@ -237,9 +272,13 @@
 | 4 | 多家公司混合各档时访问 `/` | summary 各数字加和正确；公司表按后端 `total DESC, urgent DESC, name ASC` 排序展示 |
 | 5 | 点击 summary「紧急 5」 | 跳转到 `/tasks?status=pending`；列表区状态选 `pending` |
 | 6 | 点击 summary「合计 12」 | 跳转到 `/tasks?remind_today=true`；列表区显示提醒区间内任务 |
-| 7 | 点击公司名「ACME」 | 跳转到 `/tasks?company_id=2`；列表筛选该公司 |
-| 8 | 点击公司行某格非零数字 | 跳转到 `/tasks?company_id=2&status=pending` |
-| 9 | 点击数字 `= 0` 的格 | 无反应，视觉仍是灰色 `el-text` |
+| 7 | 点击公司名「ACME」/ 点击公司行任意位置 | 跳转到 `/tasks?company_id=2`；整行 hover 高亮；**列表区筛选该公司的任务**（公司下拉值 = 「ACME」） |
+| 8 | 点击公司行不同位置（公司名格、紧急格、数字=0格） | 均触发同一跳转 `/tasks?company_id=2`（row-click 统一）；列表只显示该公司任务 |
+| 9 | 公司行 hover | 整行染 `--el-fill-color-light`；cursor: pointer |
+| 9a | dashboard 行点击 → /tasks?company_id=N 后 URL 与列表筛选**强一致** | Network 请求含 `?company_id=N`；公司下拉回显选项；列表只显示该公司任务 |
+| 9b | dashboard summary「紧急」点击 → /tasks?status=pending | Network 请求含 `?status=pending`；状态下拉回显「待办」 |
+| 9c | dashboard summary「合计」点击 → /tasks?remind_today=true | Network 请求含 `?remind_today=true` |
+| 9d | 用户在 /tasks 改了下拉后再次 dashboard 行点击 | **不**保留用户上次设置；按新 URL query 重新覆盖 filters |
 | 10 | 在 `/tasks` 创建任务 → 返回 `/` | dashboard 因 `onActivated` 自动刷新；新任务出现在合适档位 |
 | 11 | 切到其他标签页 → 切回 | `visibilitychange` 触发刷新 |
 | 12 | 点击页头「刷新」 | 按钮短暂 `loading`；`store.fetch()`；再次拿到新数据 |

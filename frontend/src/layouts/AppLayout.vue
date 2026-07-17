@@ -28,7 +28,15 @@ onMounted(async () => {
     <div class="app-page">
       <AppHeader />
       <main class="app-main">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <!--
+            keep-alive 只缓存 Dashboard（路由回退时仍命中 onActivated）。
+            其他视图（TaskList / Settings）正常 unmount，避免陈旧筛选条件。
+          -->
+          <keep-alive include="Dashboard">
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
       </main>
     </div>
   </div>

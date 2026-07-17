@@ -3,17 +3,20 @@
  * 侧边栏导航条：Logo + 导航项；点击触发 router.push。
  * 激活态：route.path 命中项，左 3px 主色竖条 + 浅主色背景 + 主色文字。
  * 样式遵循 spec/README.md §5.2：宽 220px，Logo 区 64px，导航项 44px × N，间距 4px。
+ *
+ * v0.2 dashboard 模块迁移：导航项精简为 2 项（今日概述 + 任务管理），其余旧路径
+ * （/tasks/today / /settings）保留可达但不在此处显示。
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { List, Bell } from '@element-plus/icons-vue'
+import { DataAnalysis, List } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 
 const navItems = [
-  { name: '任务管理', icon: List, to: '/' },
-  { name: '今日待提醒', icon: Bell, to: '/tasks/today' }
+  { name: '今日概述', icon: DataAnalysis, to: '/' },
+  { name: '任务管理', icon: List, to: '/tasks' }
 ]
 
 const activeTo = computed(() => route.path)

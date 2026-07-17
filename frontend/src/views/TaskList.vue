@@ -5,7 +5,10 @@
  * 行为完全遵循 spec/task_management.md §2 功能点。
  *
  * 路由 / 筛选双向联动：
- *   - 路由变化 → watch(route.path) 同步 filters.remind_today + 加载
+ *   - 路由 meta.remindToday 切换 → filters.remind_today
+ *   - 路由 query（company_id / project_id / task_type_id / status / remind_today）
+ *     变化 → 写回 filters 并重新拉取；这是 dashboard 行点击钻取的消费契约
+ *     （详见 spec/dashboard.md §2.3 "URL Query → filters 的消费契约"）
  *   - 筛选条「今日开关」变化 → onRemindTodayChange：与当前路由不一致时 router.push
  */
 import { ref, computed, onMounted, watch } from 'vue'
@@ -44,23 +47,67 @@ const availableProjects = computed(() => {
   return projectStore.byCompany[taskStore.filters.company_id] || []
 })
 
+/**
+ * 把 route.query 写回 taskStore.filters。
+ * 规范见 spec/dashboard.md §2.3 URL Query 消费契约：
+ * - company_id / project_id / task_type_id：传则 Number()，否则 null
+ * - status：传字符串，否则 ''
+ * - remind_today：meta OR query 任一为真即为真
+ * - company_id 改时 project_id 复位（与 onCompanyFilterChange 同语义）
+ * - page 强制重置为 1
+ */
+function applyQueryToFilters() {
+  const q = route.query
+  const wantCompanyId = q.company_id != null && q.company_id !== '' ? Number(q.company_id) : null
+
+  taskStore.filters.company_id = wantCompanyId
+  // 公司变化时清空项目（防止跨公司残留）
+  if (!wantCompanyId) {
+    taskStore.filters.project_id = null
+  }
+  taskStore.filters.project_id = q.project_id != null && q.project_id !== '' ? Number(q.project_id) : null
+  taskStore.filters.task_type_id =
+    q.task_type_id != null && q.task_type_id !== '' ? Number(q.task_type_id) : null
+  taskStore.filters.status = q.status != null && q.status !== '' ? String(q.status) : ''
+  taskStore.filters.page = 1
+}
+
+// 仅由 watch(route.query) 触发的轻量同步：query 没带 remind_today 时不动 store
+function applyRemindTodayFromQuery() {
+  const q = route.query
+  const qWant = q.remind_today === 'true' || q.remind_today === true
+  // meta 与 query 任一为真开启（dashboard summary「合计 → ?remind_today=true」生效路径）
+  const want = Boolean(route.meta?.remindToday) || qWant
+  if (taskStore.filters.remind_today !== want) {
+    taskStore.syncRemindTodayFromRoute(want)
+  }
+}
+
+async function syncFromRoute() {
+  applyQueryToFilters()
+  applyRemindTodayFromQuery()
+  keywordInput.value = taskStore.filters.keyword || ''
+  await loadWithCatch()
+}
+
 watch(
   () => route.path,
   async () => {
-    const next = remindToday.value
-    if (taskStore.filters.remind_today !== next) {
-      taskStore.syncRemindTodayFromRoute(next)
-    }
-    await loadWithCatch()
+    await syncFromRoute()
   }
 )
 
+// query 变化（包括 dashboard 钻取进来的同一路径 query 改变）也要重新同步
+watch(
+  () => route.query,
+  async () => {
+    await syncFromRoute()
+  },
+  { deep: true }
+)
+
 onMounted(async () => {
-  if (taskStore.filters.remind_today !== remindToday.value) {
-    taskStore.syncRemindTodayFromRoute(remindToday.value)
-  }
-  keywordInput.value = taskStore.filters.keyword || ''
-  await loadWithCatch()
+  await syncFromRoute()
 })
 
 async function loadWithCatch() {
@@ -88,7 +135,8 @@ function onCompanyFilterChange(val) {
 function onRemindTodayChange(val) {
   const wantToday = Boolean(val)
   if (remindToday.value !== wantToday) {
-    router.push(wantToday ? '/tasks/today' : '/')
+    // 主页改为「今日概述」(/) 后，原 `router.push('/')` 改为 `/tasks`，保证关闭今日开关后仍能落到合法 TaskList 路由
+    router.push(wantToday ? '/tasks/today' : '/tasks')
     return
   }
   taskStore.toggleRemindToday(wantToday)
@@ -203,7 +251,8 @@ async function retryLoad() {
 
 function onRemoveFilter(key) {
   if (key === 'remind_today' && remindToday.value) {
-    router.push('/')
+    // 主页改为「今日概述」(/) 后，`/` 不再是 TaskList 路由，必须落到 `/tasks`
+    router.push('/tasks')
     return
   }
   taskStore.removeFilter(key)
