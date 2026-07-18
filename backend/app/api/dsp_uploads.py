@@ -44,6 +44,91 @@ MAX_BYTES = 20 * 1024 * 1024  # 20 MB；spec §Post 入参硬上限
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
+# ==================== v0.5.4 级联下拉查询（去重值） ====================
+
+
+@router.get("/vendors", response_model=list[str])
+def get_vendors_endpoint(db=Depends(get_db)):
+    """返回所有去重的 vendor 值（按字母升序），供查询/删除页下拉使用。
+
+    返回:
+        list[str]: 去重后的 vendor 列表。
+
+    异常:
+        无业务异常。
+    """
+    return crud.dsp_upload.distinct_vendors(db)
+
+
+@router.get("/items", response_model=list[str])
+def get_items_endpoint(
+    vendor: str = Query(..., description="供应商（必填，精确匹配）"),
+    db=Depends(get_db),
+):
+    """返回指定 vendor 下所有去重的 item 值（按字母升序）。
+
+    参数:
+        vendor: 供应商；必填。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        list[str]: 去重后的 item 列表。
+
+    异常:
+        无业务异常。
+    """
+    return crud.dsp_upload.distinct_items(db, vendor)
+
+
+@router.get("/sub-items", response_model=list[str])
+def get_sub_items_endpoint(
+    vendor: str = Query(..., description="供应商（必填）"),
+    item: str = Query(..., description="业务项（必填）"),
+    db=Depends(get_db),
+):
+    """返回指定 vendor + item 下所有去重的 sub_item 值（按字母升序）。
+
+    参数:
+        vendor: 供应商；必填。
+        item: 业务项；必填。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        list[str]: 去重后的 sub_item 列表。
+
+    异常:
+        无业务异常。
+    """
+    return crud.dsp_upload.distinct_sub_items(db, vendor, item)
+
+
+@router.get("/version-dates", response_model=list[str])
+def get_version_dates_endpoint(
+    vendor: str = Query(..., description="供应商（必填）"),
+    item: str = Query(..., description="业务项（必填）"),
+    sub_item: str = Query(..., description="子业务项（必填）"),
+    db=Depends(get_db),
+):
+    """返回指定 vendor + item + sub_item 下所有去重的 version_date 值（按日期降序）。
+
+    参数:
+        vendor: 供应商；必填。
+        item: 业务项；必填。
+        sub_item: 子业务项；必填。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        list[str]: 去重后的 version_date 列表（YYYY-MM-DD 格式，最新日期排在前面）。
+
+    异常:
+        无业务异常。
+    """
+    return crud.dsp_upload.distinct_version_dates(db, vendor, item, sub_item)
+
+
+# ==================== 既有端点 ====================
+
+
 def _today_str() -> str:
     """返回当前日期的 10 字符 YYYY-MM-DD 字符串（spec 要求 created_at 由 Python 写入，不依赖 DB 函数）。"""
     return date.today().isoformat()
@@ -93,13 +178,21 @@ def _conflict_detail(upload: models.DspUpload) -> str:
 def list_uploads_endpoint(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    vendor: str | None = Query(None),
+    item: str | None = Query(None),
+    sub_item: str | None = Query(None),
+    version_date: str | None = Query(None),
     db=Depends(get_db),
 ):
-    """批次列表（按 id 倒序）。
+    """批次列表（按 id 倒序），v0.5.4 起支持 4 个可选 filter 参数。
 
     参数:
         page: 页码（从 1 开始，默认 1）。
         size: 每页条数（1-100，默认 20）。
+        vendor: 可选过滤；相等匹配；与 item/sub_item/version_date 组合为 AND。
+        item: 可选过滤。
+        sub_item: 可选过滤。
+        version_date: 可选过滤；`YYYY-MM-DD` 10 字符字符串；相等匹配。
         db: FastAPI 注入的数据库 Session。
 
     返回:
@@ -108,7 +201,15 @@ def list_uploads_endpoint(
     异常:
         无业务异常。SQLAlchemy 出错时由 FastAPI 兜底为 500。
     """
-    items, total = crud.dsp_upload.list_uploads(db, page=page, size=size)
+    items, total = crud.dsp_upload.list_uploads(
+        db,
+        page=page,
+        size=size,
+        vendor=vendor,
+        item=item,
+        sub_item=sub_item,
+        version_date=version_date,
+    )
     return {
         "items": [DspUploadRead.model_validate(item) for item in items],
         "total": total,

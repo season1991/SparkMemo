@@ -9,7 +9,10 @@ import Dashboard from '../views/Dashboard.vue'
 import TaskList from '../views/TaskList.vue'
 import Settings from '../views/Settings.vue'
 import EmailConfig from '../views/EmailConfig.vue'
+import WeeklyDemandHub from '../views/WeeklyDemandHub.vue'
 import DspUpload from '../views/DspUpload.vue'
+import WeeklyDemandQuery from '../views/WeeklyDemandQuery.vue'
+import WeeklyDemandDelete from '../views/WeeklyDemandDelete.vue'
 
 const routes = [
   {
@@ -31,10 +34,29 @@ const routes = [
     meta: { remindToday: true, title: '今日待提醒' }
   },
   {
+    // v0.5.4：模块重命名为「周需求管理」；/dsp-uploads 现在是 Hub 页
     path: '/dsp-uploads',
+    name: 'WeeklyDemandHub',
+    component: WeeklyDemandHub,
+    meta: { title: '周需求管理' }
+  },
+  {
+    path: '/dsp-uploads/upload',
     name: 'DspUpload',
     component: DspUpload,
     meta: { title: 'DSP 上传' }
+  },
+  {
+    path: '/dsp-uploads/query',
+    name: 'WeeklyDemandQuery',
+    component: WeeklyDemandQuery,
+    meta: { title: '查询' }
+  },
+  {
+    path: '/dsp-uploads/delete',
+    name: 'WeeklyDemandDelete',
+    component: WeeklyDemandDelete,
+    meta: { title: '删除' }
   },
   {
     path: '/email-config',
@@ -56,3 +78,4 @@ const router = createRouter({
 })
 
 export default router
+

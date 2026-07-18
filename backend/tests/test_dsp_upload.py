@@ -954,3 +954,206 @@ async def test_post_upload_422_missing_key_column(client):
     assert response.status_code == 422, response.text
     detail = response.json()["detail"]
     assert "data_type" in detail
+
+
+# ---------- v0.5.4 GET /api/dsp-uploads filter 参数测试 ----------
+
+
+async def _seed_uploads(client, db):
+    """上传 3 份不同 (vendor, item, sub_item, version_date) 的批次，返回其 id 列表。"""
+    rows = [{
+        4: "Ireland", 5: "机箱", 6: "BD3300006913",
+        10: "Demand", 11: 4, 13: 5,
+    }]
+    wb = _build_workbook(rows_data=rows, week_cols=[("WK01", "2024-12-30")])
+
+    ids = []
+    # 批次 1：Arista / 网络设备DSP横版 / 机箱 / 2026-07-15
+    r = await client.post(
+        "/api/dsp-uploads",
+        data={
+            "vendor": "Arista", "item": "网络设备DSP横版", "sub_item": "机箱",
+            "version_date": "2026-07-15",
+        },
+        files={"file": _xlsx_file(wb, filename="Arista-网络设备DSP横版-机箱-061626.xlsx")},
+    )
+    assert r.status_code == 201
+    ids.append((r.json()["id"], ("Arista", "网络设备DSP横版", "机箱", "2026-07-15")))
+
+    # 批次 2：Arista / 网络设备DSP横版 / 机箱 / 2026-07-22（仅 version_date 不同）
+    r = await client.post(
+        "/api/dsp-uploads",
+        data={
+            "vendor": "Arista", "item": "网络设备DSP横版", "sub_item": "机箱",
+            "version_date": "2026-07-22",
+        },
+        files={"file": _xlsx_file(wb, filename="Arista-网络设备DSP横版-机箱-061626-v2.xlsx")},
+    )
+    assert r.status_code == 201
+    ids.append((r.json()["id"], ("Arista", "网络设备DSP横版", "机箱", "2026-07-22")))
+
+    # 批次 3：vendor 不同
+    r = await client.post(
+        "/api/dsp-uploads",
+        data={
+            "vendor": "Cisco", "item": "网络设备DSP横版", "sub_item": "机箱",
+            "version_date": "2026-07-15",
+        },
+        files={"file": _xlsx_file(wb, filename="Cisco-网络设备DSP横版-机箱-061626.xlsx")},
+    )
+    assert r.status_code == 201
+    ids.append((r.json()["id"], ("Cisco", "网络设备DSP横版", "机箱", "2026-07-15")))
+
+    return ids
+
+
+async def test_get_list_no_filter_returns_all(client, db):
+    """无 filter 时返回全表（默认行为不变）。"""
+    ids = await _seed_uploads(client, db)
+    response = await client.get("/api/dsp-uploads")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+
+
+async def test_get_list_filter_by_full_tuple_size_1(client, db):
+    """4 个 filter 全提供 + size=1 → 精确查找，结果至多 1 条（命中）。"""
+    ids = await _seed_uploads(client, db)
+    response = await client.get(
+        "/api/dsp-uploads",
+        params={
+            "vendor": "Arista",
+            "item": "网络设备DSP横版",
+            "sub_item": "机箱",
+            "version_date": "2026-07-15",
+            "page": 1,
+            "size": 1,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["vendor"] == "Arista"
+    assert body["items"][0]["version_date"] == "2026-07-15"
+
+
+async def test_get_list_filter_not_found(client, db):
+    """精确查找无匹配 → 200 + total=0 + items=[]。"""
+    await _seed_uploads(client, db)
+    response = await client.get(
+        "/api/dsp-uploads",
+        params={
+            "vendor": "不存在",
+            "item": "X", "sub_item": "Y", "version_date": "2026-07-15",
+            "page": 1, "size": 1,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+async def test_get_list_partial_filter_vendor_only(client, db):
+    """仅 vendor 过滤 → 返回所有该 vendor 的批次（2 条）。"""
+    await _seed_uploads(client, db)
+    response = await client.get(
+        "/api/dsp-uploads", params={"vendor": "Arista"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert all(it["vendor"] == "Arista" for it in body["items"])
+
+
+async def test_get_list_partial_filter_vendor_item_version(client, db):
+    """部分过滤组合 → 返回精确满足的子集（1 条：Arista + 机箱 + 2026-07-22，与 07-15 区分）。"""
+    await _seed_uploads(client, db)
+    response = await client.get(
+        "/api/dsp-uploads",
+        params={
+            "vendor": "Arista",
+            "item": "网络设备DSP横版",
+            "version_date": "2026-07-22",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["version_date"] == "2026-07-22"
+
+
+# ---------- v0.5.4 级联下拉查询（去重值）测试 ----------
+
+
+async def test_cascade_vendors(client, db):
+    """GET /dsp-uploads/vendors 返回所有去重 vendor（升序）。"""
+    await _seed_uploads(client, db)
+    resp = await client.get("/api/dsp-uploads/vendors")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == ["Arista", "Cisco"]
+
+
+async def test_cascade_items(client, db):
+    """GET /dsp-uploads/items?vendor=Arista 返回该 vendor 下所有去重 item。"""
+    await _seed_uploads(client, db)
+    resp = await client.get("/api/dsp-uploads/items", params={"vendor": "Arista"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == ["网络设备DSP横版"]
+
+
+async def test_cascade_sub_items(client, db):
+    """GET /dsp-uploads/sub-items?vendor=Arista&item=网络设备DSP横版 返回该组合下所有去重 sub_item。"""
+    await _seed_uploads(client, db)
+    resp = await client.get(
+        "/api/dsp-uploads/sub-items",
+        params={"vendor": "Arista", "item": "网络设备DSP横版"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == ["机箱"]
+
+
+async def test_cascade_version_dates(client, db):
+    """GET /dsp-uploads/version-dates 返回该 (vendor, item, sub_item) 下所有去重 version_date（降序）。"""
+    await _seed_uploads(client, db)
+    resp = await client.get(
+        "/api/dsp-uploads/version-dates",
+        params={"vendor": "Arista", "item": "网络设备DSP横版", "sub_item": "机箱"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # _seed_uploads 创建了 2 个日期：2026-07-15 和 2026-07-22
+    assert body == ["2026-07-22", "2026-07-15"]
+
+
+async def test_cascade_vendors_empty(client, db):
+    """无数据时 vendors 返回空数组。"""
+    resp = await client.get("/api/dsp-uploads/vendors")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_cascade_items_missing_vendor(client, db):
+    """缺 vendor 参数 → 422。"""
+    resp = await client.get("/api/dsp-uploads/items")
+    assert resp.status_code == 422
+
+
+async def test_cascade_sub_items_missing_item(client, db):
+    """缺 item 参数 → 422。"""
+    resp = await client.get("/api/dsp-uploads/sub-items", params={"vendor": "Arista"})
+    assert resp.status_code == 422
+
+
+async def test_cascade_version_dates_missing_sub_item(client, db):
+    """缺 sub_item 参数 → 422。"""
+    resp = await client.get(
+        "/api/dsp-uploads/version-dates",
+        params={"vendor": "Arista", "item": "网络设备DSP横版"},
+    )
+    assert resp.status_code == 422

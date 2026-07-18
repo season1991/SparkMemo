@@ -103,8 +103,8 @@
 
 ## Phase 4 — OpenAPI
 
-- [x] **4.1** 后端 `python -c "from app.main import app; ..."` 重导 `backend/openapi/dsp_uploads.json`（含 4 form fields 必填、6 API）
-- [x] **4.2** `info.version` 升 `0.5.1`（v0.5.2 未变更）
+- [x] **4.1** 后端 `python -c "from app.main import app; ..."` 重导 `backend/openapi/dsp_uploads.json`（含 4 form fields 必填 + 10 API 含 4 个级联查询端点）
+- [x] **4.2** `info.version` 升 `0.5.1`（v0.5.2 未变更；v0.5.4 新增级联查询端点）
 
 ---
 
@@ -116,9 +116,14 @@
 - [x] **5.4** view: CSS `max-width: 720 → 960`
 - [x] **5.5** view: 删除 `formDisabled` 概念；4 字段 disabled 仅看 `!store.hasFile`
 - [x] **5.6** 测试: store +4 / -1 case；view +2 / -1 case
-- [x] **5.7** spec: `frontend/spec/dsp_upload.md` §1.3/§2.2/§2.3/§2.4/§3/§5/§6/§7/§8 全量更新
-- [x] **5.8** spec: `backend/spec/dsp_upload.md` §重传策略 + 修订记录
-- [x] **5.9** 验证: `npm test` 全绿（39 / 39）；`pytest -q` 仍 194/194（无后端改动）
+- [x] **5.7** spec: `frontend/spec/weekly_demand.md` §1.3/§2.2/§2.3/§2.4/§3/§5/§6/§7/§8 全量更新
+- [x] **5.8** spec: `backend/spec/weekly_demand.md` §重传策略 + 修订记录
+- [x] **5.9** 验证: `npm test` 全绿（52 / 52）；`pytest -q` 仍 214/214（无后端改动）
+- [x] **5.10** 级联下拉: 查询/删除页 4 字段改为 el-select 级联（vendor → item → sub_item → version_date）
+- [x] **5.11** 后端 API: 新增 4 个级联查询端点（vendors/items/sub-items/version-dates）
+- [x] **5.12** 后端 CRUD: 新增 4 个查询函数（distinct_vendors/items/sub_items/version_dates）
+- [x] **5.13** 前端 API: 新增 4 个级联查询函数
+- [x] **5.14** 前端测试: +8 case（4 个级联端点 + 4 个边界 case）
 
 ---
 
@@ -135,8 +140,8 @@
 
 ## 验证清单（每 PR）
 
-- [x] `pytest -q` 全绿（194 / 194；后端无改动）
-- [x] `npm test` 全绿（39 / 39，含 v0.5.2 新增 7 测）
+- [x] `pytest -q` 全绿（214 / 214；v0.5.4 后端新增 8 个级联查询测试）
+- [x] `npm test` 全绿（52 / 52；v0.5.4 前端新增 13 测）
 - [x] `frontend/src/views/DspUpload.vue` / `stores/useDspUploadStore.js` / `utils/dspFilename.js` 全有 JSDoc 中文
 - [x] 页面 max-width = 960px（720 → 960 v0.5.2）
 - [x] 上传成功后页面下方出现 el-table 预览

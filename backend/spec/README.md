@@ -79,7 +79,7 @@ SparkMemo/
 |:-----|:---------|:--------:|
 | 任务管理 | [./task_management.md](./task_management.md) | [x] 已完成 |
 | 今日概述 | [./dashboard.md](./dashboard.md) | [x] 已完成 |
-| DSP 上传 | [./dsp_upload.md](./dsp_upload.md) | [x] 已完成 |
+| 周需求管理 | [./weekly_demand.md](./weekly_demand.md) | [x] 已完成（v0.5.4：含 DSP 上传 / 查询 / 删除 3 子功能） |
 
 
 ## 5. 开发规范

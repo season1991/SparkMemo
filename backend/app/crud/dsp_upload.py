@@ -135,25 +135,54 @@ def get_upload(db, upload_id: int) -> Optional[models.DspUpload]:
     return db.get(models.DspUpload, upload_id)
 
 
-def list_uploads(db, *, page: int = 1, size: int = 20) -> tuple[list[models.DspUpload], int]:
+def list_uploads(
+    db,
+    *,
+    page: int = 1,
+    size: int = 20,
+    vendor: Optional[str] = None,
+    item: Optional[str] = None,
+    sub_item: Optional[str] = None,
+    version_date: Optional[str] = None,
+) -> tuple[list[models.DspUpload], int]:
     """批次列表（按 id 倒序），分页返回 (items, total)。
+
+    v0.5.4 新增可选过滤参数：
+        vendor / item / sub_item / version_date 任一非 None 时作为精确匹配条件加入 WHERE（AND 关系）；
+        全部 None 时退化为无过滤（原 v0.5 行为）。
 
     参数:
         db: SQLAlchemy Session。
         page: 页码（从 1 开始）。
         size: 每页条数。
+        vendor / item / sub_item / version_date: 可选过滤（参见 §frontend spec §2.9 查询子模块）。
 
     返回:
-        tuple[list[models.DspUpload], int]: (本页行实例列表, 全表总数)。
+        tuple[list[models.DspUpload], int]: (本页行实例列表, 匹配总数)。
 
     异常:
         无业务异常。
     """
-    total = db.execute(select(func.count()).select_from(models.DspUpload)).scalar() or 0
+    base_query = select(models.DspUpload)
+    count_query = select(func.count()).select_from(models.DspUpload)
+
+    conditions = []
+    if vendor is not None:
+        conditions.append(models.DspUpload.vendor == vendor)
+    if item is not None:
+        conditions.append(models.DspUpload.item == item)
+    if sub_item is not None:
+        conditions.append(models.DspUpload.sub_item == sub_item)
+    if version_date is not None:
+        conditions.append(models.DspUpload.version_date == version_date)
+    for cond in conditions:
+        base_query = base_query.where(cond)
+        count_query = count_query.where(cond)
+
+    total = db.execute(count_query).scalar() or 0
     rows = (
         db.execute(
-            select(models.DspUpload)
-            .order_by(models.DspUpload.id.desc())
+            base_query.order_by(models.DspUpload.id.desc())
             .offset((page - 1) * size)
             .limit(size)
         )
@@ -221,3 +250,52 @@ def delete_upload(db, upload_id: int) -> bool:
     db.delete(upload)
     db.commit()
     return True
+
+
+# ---------- v0.5.4 级联下拉查询（去重值）----------
+
+
+def distinct_vendors(db) -> list[str]:
+    """返回 dsp_uploads 表中所有去重的 vendor 值（按字母升序）。"""
+    rows = db.execute(
+        select(models.DspUpload.vendor)
+        .distinct()
+        .order_by(models.DspUpload.vendor)
+    ).scalars().all()
+    return list(rows)
+
+
+def distinct_items(db, vendor: str) -> list[str]:
+    """返回指定 vendor 下所有去重的 item 值（按字母升序）。"""
+    rows = db.execute(
+        select(models.DspUpload.item)
+        .where(models.DspUpload.vendor == vendor)
+        .distinct()
+        .order_by(models.DspUpload.item)
+    ).scalars().all()
+    return list(rows)
+
+
+def distinct_sub_items(db, vendor: str, item: str) -> list[str]:
+    """返回指定 vendor + item 下所有去重的 sub_item 值（按字母升序）。"""
+    rows = db.execute(
+        select(models.DspUpload.sub_item)
+        .where(models.DspUpload.vendor == vendor)
+        .where(models.DspUpload.item == item)
+        .distinct()
+        .order_by(models.DspUpload.sub_item)
+    ).scalars().all()
+    return list(rows)
+
+
+def distinct_version_dates(db, vendor: str, item: str, sub_item: str) -> list[str]:
+    """返回指定 vendor + item + sub_item 下所有去重的 version_date 值（按日期降序）。"""
+    rows = db.execute(
+        select(models.DspUpload.version_date)
+        .where(models.DspUpload.vendor == vendor)
+        .where(models.DspUpload.item == item)
+        .where(models.DspUpload.sub_item == sub_item)
+        .distinct()
+        .order_by(models.DspUpload.version_date.desc())
+    ).scalars().all()
+    return list(rows)

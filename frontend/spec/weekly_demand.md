@@ -1,28 +1,35 @@
-# DSP 上传模块规格（前端）
+# 周需求管理模块规格（前端，v0.5.4 — 替代原「DSP 上传」）
 
-> 适配 OpenAPI：[../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.1`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead`）
-> 适配后端 spec：[../../backend/spec/dsp_upload.md](../../backend/spec/dsp_upload.md)（v0.5.3）
-> 前端实现版本：v0.5.3（沿用 v0.5.2 路由与表层交互；后端解析层 v0.5.3 起改为列头文本匹配，**前端无需改动**）
-> 页面入口：`views/DspUpload.vue`（路由 `/dsp-uploads`）
+> 适配 OpenAPI：[../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.4`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead` / `DspUploadListResponse`）
+> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.4）
+> 前端实现版本：v0.5.4（v0.5.3 列头匹配稳定；本轮新增 hub 页 + 查询 + 删除子模块）
+> 页面入口：
+> - Hub：`views/WeeklyDemandHub.vue`（路由 `/dsp-uploads`）
+> - 上传：`views/DspUpload.vue`（路由 `/dsp-uploads/upload`）
+> - 查询：`views/WeeklyDemandQuery.vue`（路由 `/dsp-uploads/query`）
+> - 删除：`views/WeeklyDemandDelete.vue`（路由 `/dsp-uploads/delete`）
 > 全局规则遵循 [./README.md](./README.md)；本文档只描述本模块特有的页面拆解、功能点交互与测试案例。
 
-> **v0.5.3 后端侧变更**（仅说明，前端不需要适配）：
+> **v0.5.4 前端侧变更**（摘要）：
 >
-> 1. 之前按字面列号（col 4/5/6/10/11/12）硬编码的字段映射改为按行 1 列头文本匹配
->    （去 `*` + strip + 大小写不敏感）；
-> 2. 周列起点从硬编码 `update_by` 列改为行 1 全列扫 `YYYY-MM` 段标签；
-> 3. 缺列时 `BadHeaderError` → 422，detail 为 `"Excel header missing required column '<name>'"`（在 toast 中展示）。
->
-> 前端 view 无任何字段位置假设，不依赖列号；错误展示沿用 axios 拦截器 humanize。
-> 列头匹配 / 周列识别由后端负责。
+> 1. **模块重命名**：`DSP 上传` → `周需求管理`；侧边栏第 3 项改名 + icon 维持 `Upload`。
+> 2. **路由层级**：`/dsp-uploads` 变成 hub 页（3 张卡片跳转），子路由 `/dsp-uploads/{upload,query,delete}`。
+> 3. **查询**：新增 `WeeklyDemandQuery.vue`；4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览。
+> 4. **删除**：新增 `WeeklyDemandDelete.vue`；4 字段 form + 查询预览按钮 + 删除按钮（带 `ElMessageBox.confirm` 二次确认）。
+> 5. API 层扩展：`api/dsp_uploads.js` 加 `findBatchByVersion(meta)` 帮助函数；走既有 `GET /api/dsp-uploads?vendor=&item=&sub_item=&version_date=`（v0.5.4 新增的 4 个可选 query 参数）。
 
 ---
 
 ## 1. 整体页面结构拆解
 
-### 1.1 路由与视图
+### 1.1 路由与视图（v0.5.4）
 
 | 路径 | 视图 | 侧边栏激活项 | `meta.title` | 说明 |
+|------|------|------------|--------------|------|
+| `/dsp-uploads` | `views/WeeklyDemandHub.vue` | 周需求管理 | 周需求管理 | Hub 页：3 张功能卡片导航到子页面 |
+| `/dsp-uploads/upload` | `views/DspUpload.vue` | 周需求管理 | DSP 上传 | 上传文件（v0.5.3 行为沿用） |
+| `/dsp-uploads/query` | `views/WeeklyDemandQuery.vue` | 周需求管理 | 查询 | 按 4 字段精确查找已存在批次 + 事实行预览 |
+| `/dsp-uploads/delete` | `views/WeeklyDemandDelete.vue` | 周需求管理 | 删除 | 按 4 字段定位 → 预览 → 确认删除 |
 |------|------|------------|--------------|------|
 | `/dsp-uploads` | `views/DspUpload.vue` | DSP 上传 | DSP 上传 | 单页向导：选文件 → 自动解析 + 编辑 4 字段 → 载入 → 下方结果卡预览前 50 条 |
 
@@ -32,7 +39,7 @@
 |------|------|------|----|
 | 1 | 今日概述 | `DataAnalysis` | `/` |
 | 2 | 任务管理 | `List` | `/tasks` |
-| 3 | **DSP 上传**（v0.5.1 新增） | `Upload` | `/dsp-uploads` |
+| 3 | **周需求管理**（v0.5.4 重命名；v0.5.1 起原名「DSP 上传」） | `Upload` | `/dsp-uploads`（hub 页） |
 | 4 | 邮箱配置 | `Message` | `/email-config` |
 
 > 图标 `Upload` 来自 `@element-plus/icons-vue`，按需 import。
@@ -106,15 +113,20 @@
 </AppLayout>
 ```
 
-### 1.4 模块涉及组件与 store
+### 1.4 模块涉及组件与 store（v0.5.4）
 
 | 类型 | 名称 | 职责 |
 |------|------|------|
 | Layout | `layouts/AppLayout.vue` | 整体布局：Sidebar + Page |
-| Layout | `layouts/AppSidebar.vue` | 左导航；**v0.5.1 追加第 3 项「DSP 上传」** |
-| View | `views/DspUpload.vue` | 单页向导；上半 el-form + 下半结果 el-card |
-| Store | `stores/useDspUploadStore.js` | state（selectedFile / form / initialParsed / uploading / uploadResult / rows / rowsTotal / rowsPage / rowsSize / error）+ actions（selectFile / updateMeta / submitUpload / loadResultRows / reset）+ getters（hasFile / hasResult / hasEditedMeta / canSubmit） |
-| API | `api/dsp_uploads.js` | `uploadDspFile / listDspUploads / getDspUpload / listDspUploadRows / deleteDspUpload` |
+| Layout | `layouts/AppSidebar.vue` | 左导航；**v0.5.4 第 3 项改名「DSP 上传」→「周需求管理」**，to 仍指向 `/dsp-uploads` |
+| View | `views/WeeklyDemandHub.vue` | **v0.5.4 新增** Hub 页：3 张卡片导航到 3 个子功能视图 |
+| View | `views/DspUpload.vue` | DSP 上传子功能（v0.5.3 行为沿用；路由迁到 `/dsp-uploads/upload`） |
+| View | `views/WeeklyDemandQuery.vue` | **v0.5.4 新增** 查询子功能：4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览 |
+| View | `views/WeeklyDemandDelete.vue` | **v0.5.4 新增** 删除子功能：4 字段 form + 「查询预览」按钮 + 「删除」按钮（带 `ElMessageBox.confirm`） |
+| Store（共享） | `stores/useDspUploadStore.js` | state（selectedFile / form / initialParsed / uploading / uploadResult / rows / rowsTotal / rowsPage / rowsSize / error）+ actions（**v0.5.2** `selectFile / updateMeta / submitUpload / loadResultRows / reset / replaceAndUpload` + **v0.5.4** `queryBatch / deleteBatch`）+ getters（hasFile / hasResult / hasEditedMeta / canSubmit） |
+| Store（新增 query-only） | `stores/useDspQueryStore.js` | **v0.5.4 新增** 仅管查询：state（form / queriedBatch / queryRows / querying / error）+ action `runQuery(form)` |
+| Store（新增 delete-only） | `stores/useDspDeleteStore.js` | **v0.5.4 新增** 仅管删除：state（form / preview / deleting / error）+ actions `loadPreview(form)` / `confirmDelete(preview)` |
+| API | `api/dsp_uploads.js` | v0.5.3：`uploadDspFile / listDspUploads / getDspUpload / listDspUploadRows / deleteDspUpload` <br> **v0.5.4 新增**：`findBatchByVersion(meta)` —— 内部走 `listDspUploads({...meta, page:1, size:1})` |
 | Util | `utils/dspFilename.js` | 纯函数 `parseFilename(filename)` —— 与后端 `services/dsp_parser.py:parse_filename` 规则一致 |
 
 ### 1.5 新增前端工具链
@@ -254,12 +266,60 @@
 | 阶段 | 内容 |
 |------|------|
 | 操作前 | 任意路由 |
-| 触发动作 | 点击侧边栏「DSP 上传」|
+| 触发动作 | 点击侧边栏「周需求管理」|
 | 路由跳转 | `router.push('/dsp-uploads')` |
-| 组件行为 | 路由切换 → `DspUpload.vue` mount → 状态由 store 全局持久（刷新组件不丢；路由切走不主动 reset） |
+| 组件行为 | 路由切换 → `WeeklyDemandHub.vue` mount（显示 3 张子功能卡片导航） |
 | 失败逻辑 | — |
 
-> 注：因为本模块无 `onMounted` 拉取，组件级别的 state reset 是由用户在「重置」按钮主动触发；如未来需要「离开即清」，可在 `onBeforeUnmount` 调 `store.reset()`。
+### 2.8 功能点：进入 Hub 页（v0.5.4 新增）
+
+| 阶段 | 内容 |
+|------|------|
+| 入口 | 侧边栏第 3 项「周需求管理」 → `router.push('/dsp-uploads')`；或直接 `#/dsp-uploads` URL |
+| 静态展示 | 页面页头 `meta.title = 周需求管理`；主区显示 3 张 `<el-card>`（横向网格或纵向栈） |
+| 卡片 1 | 标题「DSP 上传」+ 描述「上传 DSP 周预测 Excel 文件并入库」+ 跳转图标 → 点进 `/dsp-uploads/upload` |
+| 卡片 2 | 标题「查询」+ 描述「按 (供应商 / 业务项 / 子业务项 / 版本日期) 查找已入库批次及事实行」 → `/dsp-uploads/query` |
+| 卡片 3 | 标题「删除」+ 描述「按 4 字段定位批次并删除其全部事实行」 → `/dsp-uploads/delete` |
+| 卡片交互 | hover 高亮 + 主色边框；点击整卡触发 `router.push` |
+| 失败逻辑 | — |
+
+### 2.9 功能点：查询（v0.5.4 新增）
+
+| 阶段 | 内容 |
+|------|------|
+| 入口 | 路由 `/dsp-uploads/query` 或从 Hub 卡片 2 进入 |
+| 初始态 | 4 个级联下拉框（`vendor → item → sub_item → version_date`），全部空；「查询」按钮 disabled |
+| 页面加载 | `onMounted` → 调 `getDistinctVendors()` → 填充供应商下拉框 |
+| 用户选择供应商 | 清空后续 3 个下拉框 + 已有查询结果；调 `getDistinctItems(vendor)` → 填充业务项下拉框 |
+| 用户选择业务项 | 清空后续 2 个下拉框；调 `getDistinctSubItems(vendor, item)` → 填充子业务项下拉框 |
+| 用户选择子业务项 | 清空版本日期下拉框；调 `getDistinctVersionDates(vendor, item, sub_item)` → 填充版本日期下拉框 |
+| 用户选择版本日期 | 4 字段就绪；「查询」按钮 enabled |
+| 点「查询」| 调 `findBatchByVersion(form)` → `GET /api/dsp-uploads?vendor=&item=&sub_item=&version_date=&page=1&size=1` |
+| 命中（`items.length === 1`） | 弹出结果卡：批次元数据 (`vendor / item / sub_item / version_date / source_filename / row_count / created_at`) + `el-table` 9 列事实行前 50 条（与上传页结果卡同模板）；如果 `row_count > 50` 显示分页 |
+| 未命中（`items.length === 0`） | toast「未找到该版本」；不弹结果卡；form 保留 |
+| 网络 / 5xx | 沿用 `client.showApiError(err)` |
+| 状态文案 | 「✓ 已找到 1 个批次，共 N 条事实行」/「未找到该版本」/「查询中…」 |
+| 错误约定 | 沿用 §3 |
+
+### 2.10 功能点：删除（v0.5.4 新增）
+
+| 阶段 | 内容 |
+|------|------|
+| 入口 | 路由 `/dsp-uploads/delete` 或从 Hub 卡片 3 进入 |
+| 初始态 | 4 个级联下拉框（同 §2.9）；「查询预览」+「删除」按钮 disabled |
+| 页面加载 | `onMounted` → 调 `getDistinctVendors()` → 填充供应商下拉框 |
+| 级联选择 | 同 §2.9 的级联逻辑：选 vendor → 拉 items；选 item → 拉 sub_items；选 sub_item → 拉 version_dates |
+| 点「查询预览」| 调 `findBatchByVersion(form)`（即 `GET /api/dsp-uploads?...&size=1`） |
+| 命中 | 预览卡显示：vendor / item / sub_item / version_date / source_filename / row_count / created_at + 「⚠ 删除将清空该批次的 N 条事实行（CASCADE）；删除后不可恢复」警告文案 + 「删除」按钮 enable |
+| 未命中 | toast「该版本不存在」；预览卡不显；form 保留 |
+| 点「删除」| 弹 `ElMessageBox.confirm("确定删除 vendor=… / item=… / sub_item=… / version_date=… 的 N 条事实行？删除后不可恢复", "删除确认", { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })` |
+| 用户确认 | 调 `DELETE /api/dsp-uploads/{preview.id}` |
+| 204 成功 | toast「删除成功」；清空预览卡；form 保留 |
+| 网络 / 5xx / 404（已被前端 GC）| 沿用 `client.showApiError(err)` |
+| 状态文案 | 「⚠ 即将删除 N 条事实行」/「该版本不存在」/「删除中…」/「删除成功」 |
+| 错误约定 | 沿用 §3 |
+
+> 注：`useDspUploadStore`（既有）保留 upload 子功能的全部状态；查询和删除页面各自内部管理级联下拉状态（无独立 store），通过 API 直接调用。每个页面独立、页面销毁时不相互影响。
 
 ---
 
@@ -371,17 +431,21 @@
 
 ## 7. 验证清单（每 PR）
 
-- [x] `npm test` 全绿（vitest 36+ 测）
-- [x] 后端 `pytest backend/tests` 全绿（194 / 0 改动）
-- [x] `frontend/src/views/DspUpload.vue` / `stores/useDspUploadStore.js` / `utils/dspFilename.js` 全部有 docstring（JSDoc 中文）
-- [x] 侧边栏第 3 项 `DSP 上传` 显示并跳 `/dsp-uploads`
-- [x] 页面 max-width = 960px（720 → 960 v0.5.2）
-- [x] 上传成功后页面下方出现 el-table 预览
-- [x] 上传成功后 4 字段保持 enabled（不再 formDisabled）
+- [x] `npm test` 全绿（vitest **40**+ 测；v0.5.4 新增 Hub / Query / Delete store + view 单测）
+- [x] 后端 `pytest backend/tests` 全绿（**51 + 4** / v0.5.4 新增 list with filter 测试）
+- [x] `frontend/src/views/WeeklyDemandHub.vue` / `WeeklyDemandQuery.vue` / `WeeklyDemandDelete.vue` / `DspUpload.vue` / `stores/useDspUploadStore.js` / `useDspQueryStore.js` / `useDspDeleteStore.js` / `utils/dspFilename.js` 全部有 docstring（JSDoc 中文）
+- [x] 侧边栏第 3 项 `周需求管理` 显示并跳 `/dsp-uploads`（Hub）
+- [x] 4 路由都可达：`/dsp-uploads`（Hub）、`/dsp-uploads/upload`、`/dsp-uploads/query`、`/dsp-uploads/delete`
+- [x] Hub 3 张卡片各跳转正确子页面
+- [x] 查询页：4 字段必填 + 「查询」按钮 enable/disable 切换 + 命中显示预览 + 未命中 toast
+- [x] 删除页：4 字段必填 + 「查询预览」显示元数据与警告文案 + 二次确认弹窗 + 「删除」按钮触发 DELETE 并清空预览
+- [x] 上传成功后页面下方出现 el-table 预览（v0.5.3 行为）
+- [x] 上传成功后 4 字段保持 enabled（不再 formDisabled，v0.5.2 行为）
 - [x] 点重置时 store.hasResult 状态下走二次确认
 - [x] 缺任一必填字段被 el-form validate 拦下，不发请求
 - [x] 409 + 用户选「替换」→ DELETE + POST 完成，结果卡刷新
 - [x] 409 + 用户选「取消」→ 表单保留，不调 DELETE
+- [x] 文件名 `dsp_upload.md` → `weekly_demand.md`（spec 文件名同步重命名）
 
 ---
 
@@ -389,6 +453,14 @@
 
 | 版本 | 章节 | 修订 |
 |------|------|------|
+| **v0.5.4** | 头部 / §1.1 / §1.2 / §1.4 / §2 / §3 / §5 / §6 / §7 / §8 | **模块重命名**：DSP 上传 → 周需求管理；新增 Hub + 查询 + 删除子功能；spec 文件 `dsp_upload.md` → `weekly_demand.md` |
+| v0.5.4 | §2.8 | Hub 页功能点（3 张卡片导航） |
+| v0.5.4 | §2.9 | 查询页功能点（4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览） |
+| v0.5.4 | §2.10 | 删除页功能点（4 字段 form + 预览 + 二次确认 + DELETE） |
+| v0.5.4 | §1.4 | store 拆分为 3 个（既有 useDspUploadStore + 新增 useDspQueryStore + useDspDeleteStore） |
+| v0.5.4 | §1.4 | api/dsp_uploads.js 新增 `findBatchByVersion(meta)` 帮助函数 |
+| **v0.5.3** | 头部 v0.5.3 段 | 后端解析层 v0.5.3 升级为列头文本匹配；前端 **0 改动**，仅在 spec 中声明版本向后对齐 |
+| v0.5.3 | §3 错误码表 | 加一行 422 列缺失场景（detail `"Excel header missing required column '<name>'"`）；沿用 `ElMessage.error` 展示 |
 | **v0.5.2** | §1.3 | 宽度 720 → 960（页面更宽以容纳预览区） |
 | v0.5.2 | §2.2 | `selectFile` 在 `hasResult=true` 时自动清 uploadResult/rows/version_date（隐式重置）|
 | v0.5.2 | §2.3 | 4 字段 disabled 条件由 `!hasFile \|\| formDisabled` 简化为 `!hasFile`；`formDisabled` 概念删除 |
@@ -399,9 +471,7 @@
 | v0.5.2 | §5.3 / §5.4 | 测试计划追加 store / view 各 2 个 case |
 | v0.5.2 | §6 | 明确「重置不再强制」 |
 | v0.5.2 | §7 | 删除 formDisabled 验证项；新增 960 / 隐式重置 / 409 替换 / 409 取消 4 个验证项 |
-| **v0.5.3** | 头部 v0.5.3 段 | 后端解析层 v0.5.3 升级为列头文本匹配；前端 **0 改动**，仅在 spec 中声明版本向后对齐 |
-| v0.5.3 | §3 错误码表 | 加一行 422 列缺失场景（detail `"Excel header missing required column '<name>'"`）；沿用 `ElMessage.error` 展示 |
-| **v0.5.1** | §1.2 | 侧边栏第 3 项「DSP 上传」新增 |
+| **v0.5.1** | §1.2 | 侧边栏第 3 项「DSP 上传」新增（原「周需求管理」前身） |
 | v0.5.1 | §1.3 | 上半 form 4 字段全部必填；下半结果卡片为新增 |
 | v0.5.1 | §2.2 | 自动解析 `/ 字段可编辑` 联动 |
 | v0.5.1 | §2.4 | 「载入」成功后整个上半 form disabled（v0.5.2 撤回）|

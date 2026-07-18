@@ -20,7 +20,7 @@ const router = useRouter()
 const navItems = [
   { name: '今日概述', icon: DataAnalysis, to: '/' },
   { name: '任务管理', icon: List, to: '/tasks' },
-  { name: 'DSP 上传', icon: Upload, to: '/dsp-uploads' },
+  { name: '周需求管理', icon: Upload, to: '/dsp-uploads' },
   { name: '邮箱配置', icon: Message, to: '/email-config' }
 ]
 
