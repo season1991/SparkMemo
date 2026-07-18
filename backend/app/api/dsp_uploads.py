@@ -33,15 +33,27 @@ from app.services.dsp_parser import (
 
 router = APIRouter(prefix="/api/dsp-uploads", tags=["dsp-uploads"])
 
-MAX_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_BYTES = 20 * 1024 * 1024  # 20 MB；spec §Post 入参硬上限
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _today_str() -> str:
+    """返回当前日期的 10 字符 YYYY-MM-DD 字符串（spec 要求 created_at 由 Python 写入，不依赖 DB 函数）。"""
     return date.today().isoformat()
 
 
 def _validate_yyyy_mm_dd(value: str) -> str:
+    """校验字符串是否符合 YYYY-MM-DD；不符时抛 400。
+
+    参数:
+        value: 表单字段 version_date 的原始值。
+
+    返回:
+        str: 原值（已校验）。
+
+    异常:
+        HTTPException 400: 当 value 不是合法 YYYY-MM-DD 时。
+    """
     from datetime import date as _date
 
     try:
@@ -55,6 +67,14 @@ def _validate_yyyy_mm_dd(value: str) -> str:
 
 
 def _conflict_detail(upload: models.DspUpload) -> str:
+    """生成 409 响应的 detail 字段值，包含具体冲突维度与已存在批次的 upload_id。
+
+    参数:
+        upload: 数据库中已存在的冲突批次行。
+
+    返回:
+        str: 形如 `"version (vendor=A, item=B, sub_item=C, version_date=YYYY-MM-DD) already uploaded (upload_id=N)"` 的可读描述。
+    """
     return (
         f"version (vendor={upload.vendor}, item={upload.item}, "
         f"sub_item={upload.sub_item}, version_date={upload.version_date}) "
@@ -68,7 +88,19 @@ def list_uploads_endpoint(
     size: int = Query(20, ge=1, le=100),
     db=Depends(get_db),
 ):
-    """批次列表（按 id 倒序）。"""
+    """批次列表（按 id 倒序）。
+
+    参数:
+        page: 页码（从 1 开始，默认 1）。
+        size: 每页条数（1-100，默认 20）。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        DspUploadListResponse: 含 `items`（批次列表）、`total`、`page`、`size` 的分页信封。
+
+    异常:
+        无业务异常。SQLAlchemy 出错时由 FastAPI 兜底为 500。
+    """
     items, total = crud.dsp_upload.list_uploads(db, page=page, size=size)
     return {
         "items": [DspUploadRead.model_validate(item) for item in items],
@@ -92,6 +124,21 @@ async def upload_endpoint(
     3. 读取字节流到内存 → parse_filename → parse_excel
     4. 重传冲突检测 → 409
     5. INSERT 批次元数据 → bulk INSERT 事实行
+
+    参数:
+        file: 浏览器上传的 `.xlsx` 文件；MIME 必须为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。
+        version_date: 用户输入的批次版本日期，10 字符 `YYYY-MM-DD`。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        DspUploadRead: 新建批次的元数据响应（含 vendor / item / sub_item / version_date / row_count / created_at）。
+
+    异常:
+        HTTPException 400: version_date 非法 / 文件名 < 3 段 / quantity 非数字或非整数浮点。
+        HTTPException 413: 文件 > 20 MB。
+        HTTPException 415: MIME 不是 .xlsx。
+        HTTPException 422: Sheet `DSP` 不存在。
+        HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。
     """
     _validate_yyyy_mm_dd(version_date)
 
@@ -137,7 +184,7 @@ async def upload_endpoint(
             created_at=_today_str(),
         )
     except IntegrityError as exc:
-        # 并发场景下唯一约束兜底
+        # 并发场景下唯一约束兜底：另一个请求刚插入同一版本，本请求拿到冲突后回滚并复检
         db.rollback()
         existing2 = crud.dsp_upload.find_by_version(
             db,
@@ -174,7 +221,18 @@ async def upload_endpoint(
 
 @router.get("/{upload_id}", response_model=DspUploadRead)
 def get_upload_endpoint(upload_id: int, db=Depends(get_db)):
-    """批次详情。"""
+    """批次详情。
+
+    参数:
+        upload_id: 批次主键。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        DspUploadRead: 单个批次的元数据。
+
+    异常:
+        HTTPException 404: 批次不存在。
+    """
     upload = crud.dsp_upload.get_upload(db, upload_id)
     if upload is None:
         raise HTTPException(status_code=404, detail="dsp upload not found")
@@ -188,7 +246,20 @@ def list_upload_rows_endpoint(
     size: int = Query(100, ge=1, le=1000),
     db=Depends(get_db),
 ):
-    """批次内事实行分页（按 id 升序）。"""
+    """批次内事实行分页（按 id 升序）。
+
+    参数:
+        upload_id: 批次主键。
+        page: 页码（从 1 开始，默认 1）。
+        size: 每页条数（1-1000，默认 100）。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        DspUploadRowListResponse: 含 `items`（事实行列表）、`total`、`page`、`size` 的分页信封。
+
+    异常:
+        HTTPException 404: 批次不存在。
+    """
     if crud.dsp_upload.get_upload(db, upload_id) is None:
         raise HTTPException(status_code=404, detail="dsp upload not found")
     items, total = crud.dsp_upload.list_rows(db, upload_id, page=page, size=size)
@@ -202,7 +273,18 @@ def list_upload_rows_endpoint(
 
 @router.delete("/{upload_id}", status_code=204)
 def delete_upload_endpoint(upload_id: int, db=Depends(get_db)):
-    """删除批次；外键 ON DELETE CASCADE 自动清空事实行。"""
+    """删除批次；外键 ON DELETE CASCADE 自动清空事实行。
+
+    参数:
+        upload_id: 批次主键。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        None: HTTP 204 No Content。
+
+    异常:
+        HTTPException 404: 批次不存在。
+    """
     ok = crud.dsp_upload.delete_upload(db, upload_id)
     if not ok:
         raise HTTPException(status_code=404, detail="dsp upload not found")
