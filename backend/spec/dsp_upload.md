@@ -103,9 +103,15 @@ def parse_filename(filename: str) -> tuple[str, str, str]:
 
 ## Excel 解析规则
 
-### 工作表结构（列号固定，不做列头文本搜索）
+### 工作表结构（v0.5.3：行 1 列头文本匹配，不再按字面列号）
 
-工作表固定 1 个，sheet 名必须为 `DSP`，否则 422。列布局如下：
+工作表固定 1 个，sheet 名必须为 `DSP`，否则 422。
+
+v0.5.3 之前的版本按字面列号硬编码（country=col 4、data_type=col 10 等）；
+**v0.5.3 起改为按行 1 列头文本首匹配定位字段**（见 §列头匹配规则），
+不同文件即使列位置不一致也能正确解析。
+
+下表仅为「参考示例 / 默认布局」，不再是硬编码：
 
 | 列号 | Excel 列 | 行 1 表头（实际样例） | 用途 | 入库字段 |
 |------|----------|----------------------|------|----------|
@@ -120,68 +126,114 @@ def parse_filename(filename: str) -> tuple[str, str, str]:
 | 9    | I        | `*Manufacturer`      | 丢弃 | — |
 | **10** | **J** | `Data Type`          | 静态 | `data_type`（过滤） |
 | **11** | **K** | `TTL`                | 静态 | `ttl` |
-| **12** | **L** | `Update By`          | 边界标记 | —（不存，仅用于划定 col 13+ 起点） |
+| **12** | **L** | `Update By`          | 参考；不强制 | —（不参与 v0.5.3 解析） |
 | **13+** | M+  | `2025-01` / 空 / `2025-02` / … | 周列 | `ym` (行 1) / `week` (行 2) / `date` (行 3) / `quantity` (行 4+) |
 
-> **明确丢弃 6 列**：`BU` / `Version` / `Region` / `Config Name` / `Model` / `Manufacturer`。`Update By` **不**在丢弃之列——它位于 col 12，充当静态列与周列之间的固定分界（解析时不读其内容，也不入库）。
+> **明确丢弃 6 列**：`BU` / `Version` / `Region` / `Config Name` / `Model` / `Manufacturer`。`Update By` **不**在丢弃之列——它在 v0.5.3 之前充当静态列与周列之间的硬编码边界；v0.5.3 起**不再**作为边界——周列起点由行 1 中的 `YYYY-MM` 段起点自动识别（见 §`ym` 段识别）。
 >
-> **行 1 表头文本不参与解析**：解析只依赖上述列号；表头文本用于人工审计与未来 schema 校验（如加了 row 1 断言「`D1 == '*Country'`」），不参与字段定位。本规格不要求运行时强制校验表头文本。
+> **行 1 表头文本不参与解析（v0.5.3 之前的硬约束，v0.5.3 反转）**：v0.5.3 行 1 表头**作为输入**驱动解析；不再按字面列号。
+
+### 列头匹配规则（v0.5.3）
+
+按下列规则在 row 1 中查找目标列：
+
+1. **去首尾空白**；
+2. **去前缀 `*`**（如 `*Country` → `Country`）；
+3. **大小写不敏感**；
+4. **首匹配**：命中第一个满足的 cell 即停。
+
+`_HEADER_TARGETS` 字典（**关键列**，缺一即 `BadHeaderError` → 422）：
+
+| 业务字段 | 归一化后匹配的别名（任一命中） |
+|----------|-------------------------------|
+| `country` | `country` |
+| `category` | `category` |
+| `config_code` | `config code`、`configcode` |
+| `data_type` | `data type`、`datatype` |
+| `ttl` | `ttl` |
+
+错误消息：`"Excel header missing required column '<name>'"`。
+
+### `ym` 段识别（v0.5.3 替代旧 `update_by` 边界）
+
+扫描 row 1 全 cell：值匹配正则 `^\d{4}-\d{2}$` 即视为「段起点」，其值（如 `2025-01`）作为段标签；
+该段起点之后的所有 col 都共享该 ym，直到下一个段起点。
+隐藏列（`column_dimensions[letter].hidden=True`）**不**被特殊过滤——见模块顶部 `dsp_parser.py` docstring。
+
+> **故意不引入「跳过隐藏列」**：原 v0.5.3 草稿中曾考虑按 `hidden` 过滤列；但真实样本 `Arista-…xlsx` 把关键列 `Category` 也设为 hidden，若按 hidden 过滤会导致该文件 422 列缺失。Hidden 是 Excel UI 状态，不应影响解析判定。
+
+### 关于隐藏列（hidden columns）
+
+v0.5.3 不根据 `column_dimensions.hidden` 过滤列或 cell：
+
+- 实际 DSP 模板常将结构性 / 已废弃列设为 hidden（如 `*BU` / `Config Name`）做分组视图；这些列本来就不参与 `_HEADER_TARGETS` 匹配，跳不跳不影响解析结果。
+- 真实样本 `Arista-…xlsx` 中 `Category` (col E) 也被 hidden，但它是关键列——若按 hidden 过滤会回归挂掉。
+
+所以 hidden 视作 UI 状态；解析层不判定它。未来若"按 hidden 跳列"成为业务需求，扩展点固定在 `_resolve_columns` / `_ym_segments` 内。
 
 ### 行布局
 
-| 行 | 用途 | 关键列 |
-|----|------|--------|
-| 1  | 列头 + `ym` 段标签 | col 4..12 表头；col 13+ 携带 `ym`（稀疏） |
-| 2  | 周编号 `WK01` / `WK02` / … | col 13..max_col |
-| 3  | 周起始日 `YYYY-MM-DD` | col 13..max_col |
-| 4..max_row | 数据行 | col 4, 5, 6, 10, 11（静态）；col 13+（`quantity`） |
+| 行 | 用途 | 关键列（v0.5.3 行 1 列头匹配 + ym 段识别） |
+|----|------|------------------------------------------|
+| 1  | 列头 + `ym` 段标签 | 5 个关键列由列头文本匹配定位；col 13+ 携带稀疏 `YYYY-MM` 段标签 |
+| 2  | 周编号 `WK01` / `WK02` / … | `_ym_segments` 识别的有效 col |
+| 3  | 周起始日 `YYYY-MM-DD` | `_ym_segments` 识别的有效 col |
+| 4..max_row | 数据行 | 通过 `_resolve_columns` 识别的 5 个关键 col；有效周列读 `quantity` |
 
-### `ym` 前向传播算法（行 1 col 13+）
+### `ym` 段识别算法（v0.5.3：全 row 1 扫 `YYYY-MM`，不再从 col 13 起）
 
-行 1 在 col 13+ 的单元格里**只**在月份分界处写值，其余列为空。一个示例节选（来自样本文件）：
+行 1 全列扫描：值匹配正则 `^\d{4}-\d{2}$` 即视为段起点，记录该 col = 段标签；段起点之后的所有 col 都继承该 ym，直到下一个段起点。一个示例节选（来自样本文件）：
 
 ```
-col:  13   14   15   16   17   18   19   20   21   22
-row1: '2025-01'  .   .   .   .   '2025-02'  .   .   .
-row2: 'WK01' 'WK02' 'WK03' 'WK04' 'WK05' 'WK06' 'WK07' 'WK08' 'WK09'
-row3: '2024-12-30' '2025-01-06' … '2025-02-03' …
+col:  10  11   12   13   14   15   16   17   18   19   20
+row1: 'Data Type' 'TTL' 'Update By' '2025-01'  .   .   .   .   '2025-02'  .   .
+row2: 'Demand'  4  ''  'WK01' 'WK02' 'WK03' 'WK04' 'WK05' 'WK06' 'WK07' 'WK08' 'WK09'
+row3:  ...                   '2024-12-30' '2025-01-06' … '2025-02-03' …
 ```
 
 **算法**：
 
 ```python
-ym_at_col: dict[int, str] = {}   # col -> "YYYY-MM"
+import re
+_YM_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+
+# 返回 col -> "YYYY-MM"；隐藏列理论上不出现（无 hidden 过滤），但 row 1 中"Update By"等
+# 静态字段不会匹配 YYYY-MM，所以天然是空，跳过；继承式前进。
+ym_at_col: dict[int, str] = {}
 current = ""
-for c in range(13, ws.max_column + 1):
-    v = ws.cell(row=1, column=c).value
-    if v is not None and str(v).strip() != "":
-        current = str(v).strip()
-    if current != "":
+for c in range(1, ws.max_column + 1):
+    v = _cell_str(ws.cell(row=1, column=c).value)
+    if v and _YM_PATTERN.match(v):
+        current = v
+    if current:
         ym_at_col[c] = current
 ```
 
-对 col 13..max_col 中所有同时满足"行 2 周编号非空 ∧ 行 3 周起始日非空"的列（即有效周列），其 `ym` 取 `ym_at_col[c]`；若该 col 没有 `ym`（即遇到 col 13 之前所有行 1 cell 都为空、且 col 13 本身也为空），该列无效，整列跳过。
+对 `ym_at_col` 字典中所有 key 列（即存在 ym 段的 col）再做一次"行 2 周编号非空 ∧ 行 3 周起始日非空"过滤，得到最终**有效周列**；其 `ym` 取 `ym_at_col[c]`。若没有任何有效周列（R3），事实行集合必为空。
+
+v0.5.3 与旧版差异：旧版硬编码 `range(13, ws.max_column + 1)`，因此列位置变化时周列起点可能错位。新版直接从 row 1 全列扫，自适应列重排 / 缺失 `update_by` 列等情况。
 
 ### 跳过规则（命中即跳过；分两层）
 
 **行级跳过（命中后整行 0 条事实记录）**：
 
-- **R1**：该行 `Country`（col 4，strip 后）和 `Config Code`（col 6，strip 后）**同时为空**（视为空行）；
-- **R2**：该行 `Data Type`（col 10，strip 后）**不等于** `Demand` **也不等于** `Supply`（大小写敏感、首尾空白已 strip；含 `Demand PO` / `GR` / `ASN` / `TTL_GAP` / `Rolling_TTLGAP` / 空字符串 / `None` 等）；
-- **R3**：col 13+ 完全无任何有效周列（极端情况，正常文件不会出现）。
+- **R1**：该行 `country`（由 `_resolve_columns` 定位的列，strip 后）和 `config_code`（同上）**同时为空**（视为空行）；
+- **R2**：该行 `data_type`（由 `_resolve_columns` 定位的列，strip 后）**不等于** `Demand` **也不等于** `Supply`（大小写敏感、首尾空白已 strip；含 `Demand PO` / `GR` / `ASN` / `TTL_GAP` / `Rolling_TTLGAP` / 空字符串 / `None` 等）；
+- **R3**：行 1 全列扫不到任何 `YYYY-MM` 段起点（即无任何有效周列；极端情况，正常文件不会出现）。
 
 **周列级跳过（仅影响 (该行 × 该周列) 这一个 cell）**：
 
 - **C1**：该周列 col `c` 的 row 2 `week` 为空 / None；
 - **C2**：该周列 col `c` 的 row 3 `date` 为空 / None；
-- **C3**：该周列 col `c` 在 `ym_at_col` 中查不到 `ym`（即 col 13 起 row 1 全空的情况，正常文件不会出现）；
+- **C3**：该周列 col `c` 在 `ym_at_col` 中查不到 `ym`（即该 col 在段起点之前；正常文件不会出现）；
 - **C4**：该 cell 的 `quantity` 为空字符串 / None / `0`（数值 `0` 也跳；详见 §数值容错）。
+- **C5（v0.5.3 草案中曾考虑，不引入）**：若未来按 `column_dimensions.hidden` 过滤列成为业务需求，扩展点固定在 `_resolve_columns` / `_ym_segments` 内。当前**不**按 hidden 过滤——详见 §关于隐藏列。
 
 **注**：C1/C2/C3 整列跳过意味着该 (行 × 列) 组合不入库；该列对**其它**数据行仍然有效（其它行 × 该列 仍正常处理）。
 
 ### 数值容错
 
-`quantity` 在行 4+ col 13+ 单元格的取值与处理：
+`quantity` 在行 4+ 各有效周列上的取值与处理（v0.5.3 起不再硬指 col 13+）：
 
 | 取值 | 处理 |
 |------|------|
@@ -191,7 +243,7 @@ for c in range(13, ws.max_column + 1):
 | 整数 `>0` / 浮点 `>0` | 转 `int()` 入库；浮点非整数（如 `1.5`）→ **400** 阻断整次上传 |
 | 其它非数字字符串 | **400** 阻断整次上传 |
 
-`ttl`（col 11）取值与处理：
+`ttl`（由 `_resolve_columns` 定位的列，v0.5.3 起不再硬指 col 11）取值与处理：
 
 | 取值 | 处理 |
 |------|------|
@@ -319,7 +371,7 @@ for c in range(13, ws.max_column + 1):
 | 409 | 同 `(vendor, item, sub_item, version_date)` 已存在 |
 | 413 | 文件 > 20 MB |
 | 415 | MIME 非 `.xlsx` |
-| 422 | Sheet `DSP` 不存在；任一必填 Form 字段缺失 |
+| 422 | Sheet `DSP` 不存在；任一必填 Form 字段缺失；**v0.5.3 新**：Excel 行 1 缺失关键列（country/category/config_code/data_type/ttl 任一）→ detail `"Excel header missing required column '<name>'"` |
 
 ---
 
@@ -399,7 +451,7 @@ for c in range(13, ws.max_column + 1):
 2. **同库同 schema**：复用现有 MySQL `sparkmemo`，新表由 `Base.metadata.create_all` 自动创建；老库走幂等 `CREATE TABLE IF NOT EXISTS`；
 3. **新依赖**：`openpyxl` 加 `backend/requirements.txt`，按 AGENTS.md 在 `dev_env` 安装；
 4. **CASCADE**：删除 `dsp_uploads` 自动级联删 `dsp_upload_rows`（SQLAlchemy `cascade="all, delete-orphan"` + DB 端 `ON DELETE CASCADE`）；
-5. **固定列号**：col 4/5/6/10/11/12 为字段映射的**唯一**依据；表头文本不参与解析。本规格不要求对表头文本做运行时断言。若未来 Excel 模板列号变化，需同步改本规格并改代码；
+5. **v0.5.3 字段定位算法**：5 个关键列（country/category/config_code/data_type/ttl）的列号由**行 1 列头文本首匹配**决定（去前缀 `*` + 首尾空白 + 大小写不敏感）；不依赖字面列号。因此跨文件即使列位置变化也能正确解析。若 Excel 模板表头文本改名，需同步改本规格 §列头匹配规则 与代码 `_HEADER_TARGETS`。
 6. **`source_filename`**：含扩展名的完整原始文件名，仅展示 / 审计用，不参与业务；
 7. **`config_code` 可空**：与原 Excel 数据保持一致，不做智能补全；但**整行 Country+ConfigCode 都空**的行整体跳过（R1）；
 8. **`data_type` 严格匹配**：仅字面 `Demand` / `Supply` 入库；其它值（含 `Demand PO` 等所有变体）整行跳过（R2）；大小写敏感、首尾空白已 strip；
@@ -411,7 +463,25 @@ for c in range(13, ws.max_column + 1):
 
 ---
 
-## 修订记录（相对原版）
+### 行布局（v0.5.3）
+
+| 行 | 用途 | 关键列 |
+|----|------|--------|
+| 1  | 列头 + `ym` 段标签 | 行 1 列头文本匹配（5 个关键列）；col 13+ 携带稀疏 `YYYY-MM` 段标签 |
+| 2  | 周编号 `WK01` / `WK02` / … | `_ym_segments` 识别的有效 col |
+| 3  | 周起始日 `YYYY-MM-DD` | `_ym_segments` 识别的有效 col |
+| 4..max_row | 数据行 | `_resolve_columns` 识别的 5 个关键 col；有效周列读 `quantity` |
+
+### v0.5.2 → v0.5.3
+
+| 章节 | v0.5.2 | v0.5.3 |
+|------|--------|--------|
+| §工作表结构 / §Excel 解析 | 静态列按字面列号（col 4/5/6/10/11/12）硬编码；`update_by` 作为 col 12 的周列起点边界 | **行 1 列头文本首匹配**（去 `*` / strip / 大小写不敏感）；周列起点改为行 1 扫 `YYYY-MM` 段标签；新章节 §列头匹配规则 与 §`ym` 段识别 |
+| §跳过规则 | C1-C4 | C1-C4 不变（不再引入 C5 hidden 列跳过） |
+| §错误约定 422 | Sheet 不存在 / Form 字段缺失 | **新增**：5 个关键列缺失 → `BadHeaderError` → 422 + detail `"Excel header missing required column '<name>'"` |
+| §Assumption 5 | "固定列号"为字段映射唯一依据 | "v0.5.3 字段定位算法"：行 1 列头文本首匹配 |
+| §行布局 | col 4..12 硬编码；col 13..max_col 周列 | 5 个关键列按列头匹配；有效周列按 `YYYY-MM` 段识别 |
+| §修订记录 | "丢弃 6 列" 表述 | 加 v0.5.3 行（明确"行 1 列头文本"为新算法） |
 
 ### v0.5.1 → v0.5.2
 

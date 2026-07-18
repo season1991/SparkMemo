@@ -40,6 +40,7 @@ def _build_workbook(
 
     rows_data: 每项是一个 dict，可包含列号 -> 值的键值对。
         列号含义：4=Country, 5=Category, 6=ConfigCode, 10=DataType, 11=TTL。
+            这些列号只是 v0.5.3 之前的硬编码位置占位；v0.5.3 起解析只依赖行 1 列头文本匹配。
         13..max_col 通过 week_cols 的索引对应。
     week_cols: [(week_str, date_str), ...]，从 col 13 起排列。
     ym_map: col -> 'YYYY-MM' 映射；如果给 None，会在 col 13 自动填 '2025-01' 整段。
@@ -77,6 +78,41 @@ def _build_workbook(
     for r_idx, row in enumerate(rows_data, start=4):
         for col, val in row.items():
             ws.cell(row=r_idx, column=col, value=val)
+
+    out = BytesIO()
+    wb.save(out)
+    wb.close()
+    out.seek(0)
+    return out
+
+
+def _build_custom_workbook(
+    *,
+    row1_cells: dict[int, str],
+    row2_cells: dict[int, str] | None = None,
+    row3_cells: dict[int, str] | None = None,
+    data_rows: list[dict[int, object]] | None = None,
+    sheet_name: str = "DSP",
+) -> BytesIO:
+    """v0.5.3 测试辅助：自由放置 row 1 cell 以验证列头匹配。
+
+    row1_cells:    col -> header text（如 {4: '*Country', 7: 'Category', ...}）
+    row2_cells / row3_cells: 同上
+    data_rows:     每项一个 dict，col -> value（行号从 4 自动递增）
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+
+    for c, v in row1_cells.items():
+        ws.cell(row=1, column=c, value=v)
+    for c, v in (row2_cells or {}).items():
+        ws.cell(row=2, column=c, value=v)
+    for c, v in (row3_cells or {}).items():
+        ws.cell(row=3, column=c, value=v)
+    for r_idx, row in enumerate(data_rows or [], start=4):
+        for c, v in row.items():
+            ws.cell(row=r_idx, column=c, value=v)
 
     out = BytesIO()
     wb.save(out)
@@ -719,3 +755,202 @@ async def test_real_file_regression(client):
     assert sample["week"].startswith("WK")
     assert len(sample["date"]) == 10 and sample["date"][4] == "-" and sample["date"][7] == "-"
     assert isinstance(sample["quantity"], int) and sample["quantity"] > 0
+
+
+# ---------- v0.5.3 列头文本匹配测试 ----------
+
+def _sample_facts_row():
+    """v0.5.3 测试通用数据行（col → value）。"""
+    return {
+        2: "Ireland",       # country
+        3: "机箱",          # category
+        4: "BD3300006913",  # config_code
+        9: "Demand",        # data_type
+        10: 4,              # ttl
+        # cols 12/13 写 ym='2025-01'；分别两个周列 14, 15
+    }
+
+
+def test_parse_excel_v0_5_3_reordered_columns_layout_a():
+    """Layout A：列头文本在最 "原始" 的位置上（col 2..6 + col 9..10），与 _build_workbook 等价。
+    列头匹配应正常解析。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            2: "*Country",
+            3: "Category",
+            4: "Config Code",
+            9: "Data Type",
+            10: "TTL",
+            12: "Update By",
+            14: "2025-01",
+        },
+        row2_cells={14: "WK01"},
+        row3_cells={14: "2024-12-30"},
+        data_rows=[
+            {2: "Ireland", 3: "机箱", 4: "BD3300006913", 9: "Demand", 10: 4, 14: 5},
+        ],
+    )
+    facts = parse_excel(wb.getvalue())
+    assert len(facts) == 1
+    f = facts[0]
+    assert f.country == "Ireland"
+    assert f.category == "机箱"
+    assert f.config_code == "BD3300006913"
+    assert f.data_type == "Demand"
+    assert f.ttl == 4
+    assert f.week == "WK01"
+    assert f.date == "2024-12-30"
+    assert f.quantity == 5
+    assert f.ym == "2025-01"
+
+
+def test_parse_excel_v0_5_3_reordered_columns_layout_b():
+    """Layout B：列头文本移到完全不同的位置上（*Country 在 col 6、TTL 在 col 4、DataType 在 col 12）。
+    验证列头匹配自适应列重排。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            4: "TTL",                      # 数据在物理位置 4
+            6: "*Country",                 # Country 在 col 6
+            7: "Category",                 # Category 在 col 7
+            9: "Config Code",              # config_code 在 col 9
+            12: "Data Type",                # data_type 在 col 12
+            14: "2025-01",
+        },
+        row2_cells={14: "WK01"},
+        row3_cells={14: "2024-12-30"},
+        data_rows=[
+            {4: 7, 6: "Ireland", 7: "机箱", 9: "BD3300006913", 12: "Demand", 14: 8},
+        ],
+    )
+    facts = parse_excel(wb.getvalue())
+    assert len(facts) == 1
+    f = facts[0]
+    assert f.country == "Ireland"   # 来自 col 6
+    assert f.category == "机箱"    # 来自 col 7
+    assert f.config_code == "BD3300006913"  # 来自 col 9
+    assert f.data_type == "Demand"  # 来自 col 12
+    assert f.ttl == 7              # 来自 col 4
+    assert f.quantity == 8
+
+
+def test_parse_excel_v0_5_3_strips_asterisk_and_whitespace():
+    """行 1 列头文本 '  *Country  '  与 '*Country' 与 'country' 等价。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            2: " *Country ",
+            3: "Category",
+            4: "Config Code",
+            9: "Data Type",
+            10: "TTL",
+            12: "2025-01",
+        },
+        row2_cells={12: "WK01"},
+        row3_cells={12: "2024-12-30"},
+        data_rows=[
+            {2: "Ireland", 3: "机箱", 4: "X", 9: "Demand", 10: 4, 12: 5},
+        ],
+    )
+    facts = parse_excel(wb.getvalue())
+    assert len(facts) == 1
+    assert facts[0].country == "Ireland"
+
+
+def test_parse_excel_v0_5_3_case_insensitive():
+    """列头文本大小写不敏感：'country' / 'COUNTRY' / 'Country' 都匹配。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            2: "country",
+            3: "CATEGORY",
+            4: "config code",
+            9: "DATA TYPE",
+            10: "ttl",
+            12: "2025-01",
+        },
+        row2_cells={12: "WK01"},
+        row3_cells={12: "2024-12-30"},
+        data_rows=[
+            {2: "Ireland", 3: "机箱", 4: "X", 9: "Demand", 10: 4, 12: 5},
+        ],
+    )
+    facts = parse_excel(wb.getvalue())
+    assert len(facts) == 1
+    assert facts[0].data_type == "Demand"
+
+
+def test_parse_excel_v0_5_3_aliases():
+    """config_code 别名：'Config Code' / 'ConfigCode' / 'configcode' 都匹配。
+    data_type 别名：'Data Type' / 'DataType' / 'datatype' 都匹配。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            2: "Country",
+            3: "Category",
+            4: "ConfigCode",          # 无空格的别名
+            9: "DataType",            # 无空格的别名
+            10: "TTL",
+            12: "2025-01",
+        },
+        row2_cells={12: "WK01"},
+        row3_cells={12: "2024-12-30"},
+        data_rows=[
+            {2: "Ireland", 3: "机箱", 4: "X", 9: "Demand", 10: 4, 12: 5},
+        ],
+    )
+    facts = parse_excel(wb.getvalue())
+    assert len(facts) == 1
+    assert facts[0].config_code == "X"
+    assert facts[0].data_type == "Demand"
+
+
+def test_parse_excel_v0_5_3_missing_country_raises_BadHeaderError():
+    """行 1 缺 country 列 → BadHeaderError。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            # 故意没有 Country 列
+            3: "Category",
+            4: "Config Code",
+            9: "Data Type",
+            10: "TTL",
+            12: "2025-01",
+        },
+        row2_cells={12: "WK01"},
+        row3_cells={12: "2024-12-30"},
+        data_rows=[
+            {3: "机箱", 4: "X", 9: "Demand", 10: 4, 12: 5},
+        ],
+    )
+    from app.services.dsp_parser import BadHeaderError
+    with pytest.raises(BadHeaderError) as ei:
+        parse_excel(wb.getvalue())
+    assert "country" in str(ei.value)
+
+
+async def test_post_upload_422_missing_key_column(client):
+    """POST 上传缺关键列的 workbook → 422 + detail 提示列名。"""
+    wb = _build_custom_workbook(
+        row1_cells={
+            2: "Country",
+            3: "Category",
+            4: "Config Code",
+            # 故意缺 data_type
+            10: "TTL",
+            12: "2025-01",
+        },
+        row2_cells={12: "WK01"},
+        row3_cells={12: "2024-12-30"},
+        data_rows=[
+            {2: "Ireland", 3: "机箱", 4: "X", 10: 4, 12: 5},
+        ],
+    )
+    response = await client.post(
+        "/api/dsp-uploads",
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026-07-15",
+        },
+        files={"file": _xlsx_file(wb)},
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert "data_type" in detail

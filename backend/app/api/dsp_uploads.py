@@ -6,12 +6,14 @@
 - 409：同 (vendor, item, sub_item, version_date) 已存在
 - 413：文件 > 20 MB
 - 415：MIME 非 .xlsx
-- 422：Sheet 'DSP' 不存在；任一必填 Form 字段缺失
+- 422：Sheet 'DSP' 不存在；任一必填 Form 字段缺失；Excel 行 1 缺失关键列（country/category/config_code/data_type/ttl 中任一）
 
 v0.5.1 变更：POST /api/dsp-uploads 升级为接收 4 个**必填** Form 字段（vendor / item /
 sub_item / version_date）；不再调用 `parse_filename` 从文件名回退解析——文件名解析
 逻辑迁至前端。本路由不再 import `parse_filename`，仅保留调用以 `parse_excel` 为核心
 的解析路径。
+
+v0.5.3 变更：新增对 `BadHeaderError` 的捕获（行 1 关键列缺失）→ 422。
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from app.schemas import (
     DspUploadRowRead,
 )
 from app.services.dsp_parser import (
+    BadHeaderError,
     BadQuantityError,
     SheetMissingError,
     parse_excel,
@@ -152,7 +155,7 @@ async def upload_endpoint(
         HTTPException 400: version_date 非法 / quantity 非数字或非整数浮点。
         HTTPException 413: 文件 > 20 MB。
         HTTPException 415: MIME 不是 .xlsx。
-        HTTPException 422: Sheet `DSP` 不存在；或任一必填 Form 字段缺失。
+        HTTPException 422: Sheet `DSP` 不存在；任一必填 Form 字段缺失；Excel 行 1 缺失关键列（country/category/config_code/data_type/ttl 中任一列）。
         HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。
     """
     _validate_yyyy_mm_dd(version_date)
@@ -169,6 +172,8 @@ async def upload_endpoint(
     try:
         fact_rows = parse_excel(content)
     except SheetMissingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except BadHeaderError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except BadQuantityError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

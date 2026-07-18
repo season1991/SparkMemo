@@ -1,12 +1,18 @@
-"""DSP Excel 解析模块（v0.5）。
+"""DSP Excel 解析模块（v0.5.3：列头文本匹配）。
 
 本模块是纯函数模块，不依赖 SQLAlchemy / FastAPI；可被路由层直接调用，也可被单测直接测试。
 
-约定：
-- 静态字段按**字面列号**读取：col 4=Country, 5=Category, 6=ConfigCode, 10=DataType, 11=TTL；
-- col 12=Update By 仅作周列起点边界，不读不存；
-- col 13+ 为周列；行 1 携带稀疏 `ym` 标签（前向传播），行 2 周编号，行 3 周起始日；
-- 行 4+ 为数据行；行 4..max_row 全部参与 R1/R2 行级过滤。
+**v0.5.3 变更**：解析不再依赖字面列号；改用 row 1 列头文本匹配。
+- 静态字段（country / category / config_code / data_type / ttl）通过行 1 文本首匹配定位；
+- `update_by` **不再作为周列起点边界**；周列起点由行 1 中匹配 `YYYY-MM` 模式的 cell 自动识别（一个段起点之后的连续 col 共享同一 ym，直到下一段起点）；
+- 列头文本归一化规则：strip 首尾空白 → 去前缀 `*` → strip → 小写（`"  *Country  "` 与 `"country"` 等价）。
+
+**关于隐藏列**：v0.5.3 **不**根据 `column_dimensions.hidden` 过滤列或 cell。
+原因：实际 DSP 模板常把结构性 / 已废弃列（`*BU` / `Config Name` 等）设为 hidden 做分组视图，
+   这些列不参与 `_HEADER_TARGETS` 匹配，跳不跳过都不影响解析；
+   而在真实样本 `Arista-…xlsx` 中，关键列 `Category` (col E) 也被 hidden —— 若按 hidden 过滤，
+   会导致该文件 422 列缺失。所以 hidden 视作 UI 状态不参与解析判定；
+   若未来"按 hidden 跳列"成为业务需求，扩展点固定在 `_resolve_columns` / `_ym_segments` 内。
 
 跳过规则（与 spec §跳过规则 一一对应）：
 - 行级：R1（Country+ConfigCode 同时空）、R2（DataType 不是 Demand/Supply）、R3（无有效周列）；
@@ -14,10 +20,12 @@
 
 异常：
 - SheetMissingError → 422
+- BadHeaderError → 422
 - BadQuantityError → 400
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Optional
@@ -27,23 +35,32 @@ import openpyxl
 
 SHEET_NAME = "DSP"
 
-COL_COUNTRY = 4
-COL_CATEGORY = 5
-COL_CONFIG_CODE = 6
-COL_DATA_TYPE = 10
-COL_TTL = 11
-COL_UPDATE_BY = 12
-COL_WEEK_START = 13
-
 ROW_WEEK_NO = 2
 ROW_WEEK_DATE = 3
 ROW_DATA_START = 4
 
 DATA_TYPES_KEPT = ("Demand", "Supply")
 
+# 列头匹配目标；每个 key 是一组规范化别名，归一化后命中即停止遍历该列的所有 key。
+# 关键列缺失任意一个 → BadHeaderError（v0.5.3）
+_HEADER_TARGETS: dict[str, tuple[str, ...]] = {
+    "country":     ("country",),
+    "category":    ("category",),
+    "config_code": ("config code", "configcode"),  # 容错：'Config Code' / 'ConfigCode' / 'configcode'
+    "data_type":   ("data type", "datatype"),
+    "ttl":         ("ttl",),
+}
+
+# YYYY-MM 模式：行 1 携带这种格式的 cell 视为 ym 段起点
+_YM_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+
 
 class SheetMissingError(Exception):
     """Sheet 名不是 'DSP' → 路由层映射 422。"""
+
+
+class BadHeaderError(Exception):
+    """关键列（country/category/config_code/data_type/ttl）在行 1 缺失 → 路由层映射 422。"""
 
 
 class BadQuantityError(Exception):
@@ -70,7 +87,7 @@ def parse_filename(filename: str) -> tuple[str, str, str]:
 
     实现严格按 spec 给出的伪代码。
 
-    **状态（v0.5.1）**：此函数**不再被** `POST /api/dsp-uploads` 调用——
+    **状态（v0.5.1 起）**：此函数**不再被** `POST /api/dsp-uploads` 调用——
     前端要求用户在 UI 内提供 vendor / item / sub_item，服务端仅校验与入库。
     本函数保留供以下场景使用：
     - 导入 / 迁移遗留脚本（spec 预留的「其他调用者」）；
@@ -94,18 +111,57 @@ def _cell_str(value) -> str:
     return str(value).strip()
 
 
-def _ym_propagation(ws) -> dict[int, str]:
-    """行 1 col 13+ 的稀疏 `ym` 标签做前向传播。
+def _normalize_header(value) -> str:
+    """列头文本归一化：strip → 去前缀 '*' → strip → lower。
 
-    示例：行 1 = ['', '2025-01', '', '', '', '2025-02', '', '', '2025-03', ...]
-    → {13:'2025-01', 14:'2025-01', 15:'2025-01', 16:'2025-01', 17:'2025-01',
-       18:'2025-02', 19:'2025-02', 20:'2025-02', 21:'2025-03', ...}
+    示例：
+      "  *Country  "  → "country"
+      "Data Type"     → "data type"
+      None            → ""
+    """
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if s.startswith("*"):
+        s = s[1:].strip()
+    return s.lower()
+
+
+def _resolve_columns(ws) -> dict[str, int]:
+    """列头匹配：扫描 row 1 首匹配 `_HEADER_TARGETS` 中任一别名。
+
+    v0.5.3 不根据 `column_dimensions.hidden` 过滤：详见模块顶部 docstring。
+    返回: `{"country": col_idx, "category": ..., ...}`。
+    任一关键 key 不在返回值中 → 调用方应 raise BadHeaderError。
+    """
+    found: dict[str, int] = {}
+    max_col = ws.max_column
+    for c in range(1, max_col + 1):
+        v = _normalize_header(ws.cell(row=1, column=c).value)
+        if not v:
+            continue
+        for key, alts in _HEADER_TARGETS.items():
+            if key in found:
+                continue
+            if v in alts:
+                found[key] = c
+                break
+    return found
+
+
+def _ym_segments(ws, max_col: int) -> dict[int, str]:
+    """v0.5.3 替代旧的「col 13 起做前向传播」。
+
+    扫描 row 1 全 cell：值匹配 `YYYY-MM` 即视为段起点，记录到该 col；
+    该段起点之后的所有 col 都继承该 ym，直到下一个段起点。
+    不考虑 hidden —— 见 `_resolve_columns` 注释。
+    返回: `col → "YYYY-MM"`。
     """
     result: dict[int, str] = {}
     current = ""
-    for c in range(COL_WEEK_START, ws.max_column + 1):
+    for c in range(1, max_col + 1):
         v = _cell_str(ws.cell(row=1, column=c).value)
-        if v:
+        if v and _YM_PATTERN.match(v):
             current = v
         if current:
             result[c] = current
@@ -140,10 +196,10 @@ def _parse_quantity(value, *, row: int, col: int) -> Optional[int]:
 
     规则（C4）：
     - None / 空字符串 → 跳过
-    - bool → 跳过（与 is True 视作 1 的情形混淆，保守跳过）
+    - bool → 跳过
     - 整数 0 / 浮点 0.0 → 跳过
     - 整数 >0 / 浮点整数 >0 → 入库 int
-    - 浮点非整数（如 1.5）→ 阻断（BadQuantityError）
+    - 浮点非整数（如 1.5）→ 阻断
     - 字符串：strip 后按 float 解析；非数字 → 阻断；整数化 → 入库；非整数浮点 → 阻断
     """
     if value is None:
@@ -185,7 +241,18 @@ def _parse_quantity(value, *, row: int, col: int) -> Optional[int]:
 def parse_excel(content: bytes) -> list[FactRow]:
     """解析 DSP Excel 字节流，返回展开后的事实行列表。
 
-    抛出 SheetMissingError / BadQuantityError 由路由层映射为 422 / 400。
+    v0.5.3 行为：
+    1. 校验 sheet 名 = 'DSP'，否则 `SheetMissingError`；
+    2. 在 row 1 列头文本匹配关键列（country/category/config_code/data_type/ttl），
+       任一缺失 → `BadHeaderError`；
+    3. 在 row 1 扫 `YYYY-MM` 段起点（跳过隐藏列），构建周列集合；
+    4. 对 row 4+ 数据行按 R1/R2 行级过滤；对每个有效周列按 C1/C2/C3/C4/C5 列级过滤；
+    5. 展开后返回 `[FactRow, ...]`。
+
+    异常:
+        SheetMissingError → 422
+        BadHeaderError   → 422
+        BadQuantityError → 400
     """
     wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
     if SHEET_NAME not in wb.sheetnames:
@@ -194,9 +261,19 @@ def parse_excel(content: bytes) -> list[FactRow]:
     ws = wb[SHEET_NAME]
 
     try:
-        ym_at_col = _ym_propagation(ws)
+        # 1) 列头匹配（跳过隐藏列）
+        cols = _resolve_columns(ws)
+        for required in _HEADER_TARGETS.keys():
+            if required not in cols:
+                wb.close()
+                raise BadHeaderError(
+                    f"Excel header missing required column '{required}'"
+                )
 
-        # 有效周列：(col, week, date) 列表
+        # 2) ym 段起点扫描（row 1 全列匹配 YYYY-MM，隐藏列跳过）
+        ym_at_col = _ym_segments(ws, ws.max_column)
+
+        # 3) 有效周列：ym 存在 ∧ 行 2 周编号非空 ∧ 行 3 周起始日非空（隐藏列已在前两步排除）
         week_cols: list[tuple[int, str, str]] = []
         for c in sorted(ym_at_col.keys()):
             week_v = _cell_str(ws.cell(row=ROW_WEEK_NO, column=c).value)
@@ -207,29 +284,30 @@ def parse_excel(content: bytes) -> list[FactRow]:
 
         facts: list[FactRow] = []
 
-        # R3：如果完全没有有效周列，事实行集合必为空，但仍需迭代完避免遗留
+        # R3：如果完全没有有效周列，事实行集合必为空
         if not week_cols:
             return facts
 
         for r in range(ROW_DATA_START, ws.max_row + 1):
-            country = _cell_str(ws.cell(row=r, column=COL_COUNTRY).value)
-            config_code = _cell_str(ws.cell(row=r, column=COL_CONFIG_CODE).value)
+            country = _cell_str(ws.cell(row=r, column=cols["country"]).value)
+            config_code = _cell_str(ws.cell(row=r, column=cols["config_code"]).value)
 
             # R1：Country 与 Config Code 同时为空 → 整行跳过
             if not country and not config_code:
                 continue
 
-            data_type = _cell_str(ws.cell(row=r, column=COL_DATA_TYPE).value)
+            data_type = _cell_str(ws.cell(row=r, column=cols["data_type"]).value)
             # R2：Data Type 严格匹配 Demand/Supply
             if data_type not in DATA_TYPES_KEPT:
                 continue
 
-            category = _cell_str(ws.cell(row=r, column=COL_CATEGORY).value) or None
-            ttl = _parse_ttl(ws.cell(row=r, column=COL_TTL).value)
+            category = _cell_str(ws.cell(row=r, column=cols["category"]).value) or None
+            ttl = _parse_ttl(ws.cell(row=r, column=cols["ttl"]).value)
 
             for c, week, date in week_cols:
+                # C5（隐藏列）已在 _ym_segments 中排除；此处直接读即可
                 q_raw = ws.cell(row=r, column=c).value
-                # C4：数量解析（None/空/0 跳过；非数字 → 阻断；非整数浮点 → 阻断）
+                # C4：数量解析
                 quantity = _parse_quantity(q_raw, row=r, col=c)
                 if quantity is None:
                     continue

@@ -1,10 +1,20 @@
 # DSP 上传模块规格（前端）
 
 > 适配 OpenAPI：[../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.1`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead`）
-> 适配后端 spec：[../../backend/spec/dsp_upload.md](../../backend/spec/dsp_upload.md)（v0.5.1）
-> 前端实现版本：v0.5.1（POST API 升级：4 个必填 Form 字段 `vendor / item / sub_item / version_date`）
+> 适配后端 spec：[../../backend/spec/dsp_upload.md](../../backend/spec/dsp_upload.md)（v0.5.3）
+> 前端实现版本：v0.5.3（沿用 v0.5.2 路由与表层交互；后端解析层 v0.5.3 起改为列头文本匹配，**前端无需改动**）
 > 页面入口：`views/DspUpload.vue`（路由 `/dsp-uploads`）
 > 全局规则遵循 [./README.md](./README.md)；本文档只描述本模块特有的页面拆解、功能点交互与测试案例。
+
+> **v0.5.3 后端侧变更**（仅说明，前端不需要适配）：
+>
+> 1. 之前按字面列号（col 4/5/6/10/11/12）硬编码的字段映射改为按行 1 列头文本匹配
+>    （去 `*` + strip + 大小写不敏感）；
+> 2. 周列起点从硬编码 `update_by` 列改为行 1 全列扫 `YYYY-MM` 段标签；
+> 3. 缺列时 `BadHeaderError` → 422，detail 为 `"Excel header missing required column '<name>'"`（在 toast 中展示）。
+>
+> 前端 view 无任何字段位置假设，不依赖列号；错误展示沿用 axios 拦截器 humanize。
+> 列头匹配 / 周列识别由后端负责。
 
 ---
 
@@ -389,6 +399,8 @@
 | v0.5.2 | §5.3 / §5.4 | 测试计划追加 store / view 各 2 个 case |
 | v0.5.2 | §6 | 明确「重置不再强制」 |
 | v0.5.2 | §7 | 删除 formDisabled 验证项；新增 960 / 隐式重置 / 409 替换 / 409 取消 4 个验证项 |
+| **v0.5.3** | 头部 v0.5.3 段 | 后端解析层 v0.5.3 升级为列头文本匹配；前端 **0 改动**，仅在 spec 中声明版本向后对齐 |
+| v0.5.3 | §3 错误码表 | 加一行 422 列缺失场景（detail `"Excel header missing required column '<name>'"`）；沿用 `ElMessage.error` 展示 |
 | **v0.5.1** | §1.2 | 侧边栏第 3 项「DSP 上传」新增 |
 | v0.5.1 | §1.3 | 上半 form 4 字段全部必填；下半结果卡片为新增 |
 | v0.5.1 | §2.2 | 自动解析 `/ 字段可编辑` 联动 |
