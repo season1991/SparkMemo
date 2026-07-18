@@ -1,24 +1,30 @@
 <script setup>
 /**
- * DSP 上传主页（路由 /dsp-uploads）。
+ * DSP 上传主页（路由 /dsp-uploads，v0.5.2）。
  *
- * 数据流（v0.5.1）：
+ * 数据流：
  *   1. 用户选 .xlsx 文件 → onFileChange → store.selectFile(file)
- *      自动调 parseFilename 解析 → 自动填充 form.vendor / item / sub_item 并 snapshot 到 initialParsed
+ *      - parseFilename 自动解析 → 自动填充 form.vendor / item / sub_item 并 snapshot 到 initialParsed
+ *      - (v0.5.2) 若当前 hasResult=true，selectFile 入口先自动重置 uploadResult / rows /
+ *        version_date，让用户在同一页开始新一轮，不必先点「重置」
  *   2. 用户可修改 3 段输入（store.updateMeta）；选 version_date
+ *      - (v0.5.2) 4 字段在上传成功后保持 enabled（不再被 formDisabled 锁死）
  *   3. 点「载入」→ store.submitUpload() → POST /api/dsp-uploads (multipart, 4 form fields)
- *   4. 成功后页面下方出现结果卡：el-table 预览前 50 条 + 分页器（仅 total>50 时显示）
+ *      - 成功 → 页面下方结果卡出现
+ *      - (v0.5.2) 409 → 解析 detail 取出 upload_id → ElMessageBox.confirm
+ *        - 「替换」→ store.replaceAndUpload(uploadId) → DELETE + 重发 POST
+ *        - 「取消」→ 表单保留原值，不动
  *
  * 错误码 → UI 文案遵循 frontend/spec/README.md §3.5.4 + 后端 spec §错误约定：
  *   400 → ElMessage.error(detail)
- *   409 → ElMessageBox.alert（沿用 showApiError）
+ *   409 → ElMessageBox.confirm → replace / 取消（v0.5.2）
  *   413/415/422/5xx → ElMessage.error
  *
  * 「重置」二次确认：当 store.hasResult === true，弹 ElMessageBox.confirm。
  *
  * 全局规则遵循 frontend/spec/README.md。
  */
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError, showApiError } from '../api/client.js'
 import { useDspUploadStore } from '../stores/useDspUploadStore.js'
@@ -93,7 +99,14 @@ function onFileRemove() {
   // 不动 form.vendor/item/sub_item，让用户保留已编辑值（万一误点）
 }
 
-// 提交
+// 解析 409 detail 取 upload_id；取不到返回 null
+function parseUploadIdFrom409(detail) {
+  if (typeof detail !== 'string') return null
+  const m = detail.match(/upload_id=(\d+)/)
+  return m ? Number(m[1]) : null
+}
+
+// 提交（含 409 替换流程，v0.5.2）
 async function onSubmit() {
   if (!formRef.value) return
   // el-form validate
@@ -106,9 +119,50 @@ async function onSubmit() {
   const r = await store.submitUpload()
   if (r.ok) {
     ElMessage.success(`载入成功，共 ${r.response.row_count} 条数据`)
-  } else if (r.error instanceof ApiError) {
-    showApiError(r.error)
+    return
   }
+  // 非 ApiError 一律兜底
+  if (!(r.error instanceof ApiError)) {
+    if (r.error) {
+      ElMessage.error(r.error.message || '上传失败')
+    }
+    return
+  }
+  // 409 替换流程
+  if (r.error.status === 409) {
+    const oldId = parseUploadIdFrom409(r.error.detail)
+    if (oldId === null) {
+      // detail 不含 upload_id 的退化路径：行为同 v0.5.1
+      showApiError(r.error)
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        '该版本（vendor / item / sub_item / version_date）已存在。\n是否替换？替换将先清空当前批次的全部事实行再重新导入。',
+        '数据已存在',
+        {
+          type: 'warning',
+          confirmButtonText: '替换',
+          cancelButtonText: '取消'
+        }
+      )
+    } catch {
+      // 用户选「取消」：表单状态保留；可在 UI 内修改后再「载入」（重试仍可能再次 409）
+      return
+    }
+    // 用户选「替换」→ DELETE + 重发 POST
+    const r2 = await store.replaceAndUpload(oldId)
+    if (r2.ok) {
+      ElMessage.success(`替换成功，共 ${r2.response.row_count} 条数据`)
+    } else if (r2.error instanceof ApiError) {
+      showApiError(r2.error)
+    } else if (r2.error) {
+      ElMessage.error(r2.error.message || '替换失败')
+    }
+    return
+  }
+  // 其它业务错误
+  showApiError(r.error)
 }
 
 // 重置
@@ -135,9 +189,6 @@ async function onPageChange(page) {
 async function onSizeChange(size) {
   await store.loadResultRows(1, size)
 }
-
-// 「载入后」disabled 上半段表单（用户想再传需要先「重置」）
-const formDisabled = computed(() => store.uploading || store.hasResult)
 </script>
 
 <template>
@@ -184,7 +235,7 @@ const formDisabled = computed(() => store.uploading || store.hasResult)
         <el-form-item label="供应商（vendor）" prop="vendor">
           <el-input
             v-model="store.form.vendor"
-            :disabled="!store.hasFile || formDisabled"
+            :disabled="!store.hasFile"
             placeholder="自动从文件名解析，可修改"
             maxlength="64"
             show-word-limit
@@ -195,7 +246,7 @@ const formDisabled = computed(() => store.uploading || store.hasResult)
         <el-form-item label="业务项（item）" prop="item">
           <el-input
             v-model="store.form.item"
-            :disabled="!store.hasFile || formDisabled"
+            :disabled="!store.hasFile"
             placeholder="自动从文件名解析，可修改"
             maxlength="128"
             show-word-limit
@@ -206,7 +257,7 @@ const formDisabled = computed(() => store.uploading || store.hasResult)
         <el-form-item label="子业务项（sub_item）" prop="sub_item">
           <el-input
             v-model="store.form.sub_item"
-            :disabled="!store.hasFile || formDisabled"
+            :disabled="!store.hasFile"
             placeholder="自动从文件名解析，可修改"
             maxlength="128"
             show-word-limit
@@ -217,7 +268,7 @@ const formDisabled = computed(() => store.uploading || store.hasResult)
         <el-form-item label="版本日期（version_date）" prop="version_date">
           <el-date-picker
             v-model="store.form.version_date"
-            :disabled="!store.hasFile || formDisabled"
+            :disabled="!store.hasFile"
             type="date"
             value-format="YYYY-MM-DD"
             placeholder="选择版本日期（不晚于今天）"
@@ -296,7 +347,7 @@ const formDisabled = computed(() => store.uploading || store.hasResult)
 
 <style scoped>
 .dsp-upload-view {
-  max-width: 720px;
+  max-width: 960px;  /* v0.5.2: 720 → 960 适配预览区 9 列 */
   margin: 0 auto;
 }
 .page-title {

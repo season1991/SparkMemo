@@ -89,7 +89,10 @@
   - 「载入」按钮：canSubmit 控制 disabled + uploading 时 loading
   - 「重置」按钮：hasResult 时 ElMessageBox.confirm
   - 错误处理沿用 `client.showApiError`
+  - **v0.5.2**：onSubmit 多级 409 处理—— 解析 detail → ElMessageBox.confirm → 用户选「替换」→ `store.replaceAndUpload(uploadId)`；选「取消」→ 表单保留
+  - **v0.5.2**：4 字段 disabled 仅看 `!store.hasFile`，不锁；CSS `max-width: 960px`
 - [x] **3.5.2** `el-upload` 不引入，直接用隐藏 `<input type="file">` 触发
+- [x] **3.5.3** **v0.5.2**：store 新增 `replaceAndUpload(uploadId)`（DELETE + 清空 + submitUpload）；`selectFile` 在 hasResult=true 时自动重置；`formDisabled` getter 删除
 
 ### 3.6 工具链
 - [x] **3.6.1** `frontend/vitest.config.js`
@@ -101,25 +104,46 @@
 ## Phase 4 — OpenAPI
 
 - [x] **4.1** 后端 `python -c "from app.main import app; ..."` 重导 `backend/openapi/dsp_uploads.json`（含 4 form fields 必填、6 API）
-- [x] **4.2** `info.version` 升 `0.5.1`
+- [x] **4.2** `info.version` 升 `0.5.1`（v0.5.2 未变更）
+
+---
+
+## Phase 5 — v0.5.2 增量
+
+- [x] **5.1** store: `selectFile` 自动隐式 reset
+- [x] **5.2** store: 新增 `replaceAndUpload(uploadId)` action
+- [x] **5.3** view: `onSubmit` 多级 409 处理（confirm + retry）
+- [x] **5.4** view: CSS `max-width: 720 → 960`
+- [x] **5.5** view: 删除 `formDisabled` 概念；4 字段 disabled 仅看 `!store.hasFile`
+- [x] **5.6** 测试: store +4 / -1 case；view +2 / -1 case
+- [x] **5.7** spec: `frontend/spec/dsp_upload.md` §1.3/§2.2/§2.3/§2.4/§3/§5/§6/§7/§8 全量更新
+- [x] **5.8** spec: `backend/spec/dsp_upload.md` §重传策略 + 修订记录
+- [x] **5.9** 验证: `npm test` 全绿（39 / 39）；`pytest -q` 仍 194/194（无后端改动）
 
 ---
 
 ## Phase 6 — 收尾
 
-- [x] **6.1** 后端 `backend/spec/dsp_upload.md` 同步 v0.5.1（POST 入参表 4 项必填、错误约定 422 含字段缺失、parse_filename 状态、修订记录双版）
+- [x] **6.1** 后端 `backend/spec/dsp_upload.md` 同步 v0.5.1 + v0.5.2
 - [x] **6.2** 后端 `requirements.txt` 已含 `openpyxl>=3.1`
-- [x] **6.3** 前端 `frontend/spec/dsp_upload.md` 新建
-- [x] **6.4** 前端 `.todo/dsp_upload.md`（本文件）全部 `[x]`
-- [x] **6.5** 全量回归：`pytest -q` 194/194；`npm test` 32/32
+- [x] **6.3** 前端 `frontend/spec/dsp_upload.md` 同步 v0.5.2
+- [x] **6.4** 前端 `.todo/dsp_upload.md`（本文件）Phase 1~6 全部 `[x]`
+- [x] **6.5** 全量回归：`pytest -q` 194/194；`npm test` 39/39
 - [x] **6.6** `backend/openapi/dsp_uploads.json` 含 4 form fields
 
 ---
 
 ## 验证清单（每 PR）
 
-- [x] `pytest -q` 全绿（194 / 194）
-- [x] `npm test` 全绿（32 / 32）
+- [x] `pytest -q` 全绿（194 / 194；后端无改动）
+- [x] `npm test` 全绿（39 / 39，含 v0.5.2 新增 7 测）
 - [x] `frontend/src/views/DspUpload.vue` / `stores/useDspUploadStore.js` / `utils/dspFilename.js` 全有 JSDoc 中文
-- [x] `backend/spec/dsp_upload.md` §修订记录 同步 v0.5.1
+- [x] 页面 max-width = 960px（720 → 960 v0.5.2）
+- [x] 上传成功后页面下方出现 el-table 预览
+- [x] 上传成功后 4 字段保持 enabled（不再 formDisabled）
+- [x] 选新文件 → 自动隐式 reset（hasResult → null）
+- [x] 409 + 用户选「替换」→ DELETE + POST 完成，结果卡刷新
+- [x] 409 + 用户选「取消」→ 表单保留，不调 DELETE
+- [x] 点重置时 store.hasResult 状态下走二次确认
+- [x] `backend/spec/dsp_upload.md` §修订记录 含 v0.5.2
 - [x] `backend/openapi/dsp_uploads.json` 字段 = `ym`（非 `year_month`）+ 4 form fields

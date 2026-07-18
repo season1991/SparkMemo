@@ -216,10 +216,17 @@ for c in range(13, ws.max_column + 1):
 | 场景 | 行为 |
 |------|------|
 | 同 `(vendor, item, sub_item, version_date)` 已存在 | **409 Conflict** |
-| 响应 detail | `"version (vendor=A, item=B, sub_item=C, version_date=YYYY-MM-DD) already uploaded (upload_id=N)"` |
+| 响应 detail | `"version (vendor=A, item=B, sub_item=C, version_date=YYYY-MM-DD) already uploaded (upload_id=N)"`（含现有 upload_id，供前端编排替换流程） |
 | 不存在 | 201 创建新批次 |
 
-删除旧批次后可重传同版本（删除走 `DELETE /api/dsp-uploads/{id}`）。
+### "替换"语义（v0.5.2 起，前端编排）
+
+后端**不**新增 `replace` 参数；沿用三步组合：
+1. `POST /api/dsp-uploads` → 命中唯一键 → 409 + 含 `upload_id`
+2. 前端弹 `ElMessageBox.confirm('该版本已存在，是否替换？…')`
+3. 用户选「替换」→ 前端先 `DELETE /api/dsp-uploads/{id}`（CASCADE 清事实行）→ 再 `POST /api/dsp-uploads`
+
+详见 `frontend/spec/dsp_upload.md` §2.4。
 
 ---
 
@@ -405,6 +412,13 @@ for c in range(13, ws.max_column + 1):
 ---
 
 ## 修订记录（相对原版）
+
+### v0.5.1 → v0.5.2
+
+| 章节 | v0.5.1 | v0.5.2 |
+|------|--------|--------|
+| §重传策略 | "删除旧批次后可重传同版本"（要求用户手动删除） | **新增"替换"语义**：由前端在 409 后编排 confirm → DELETE → 重发 POST；后端 API 不变 |
+| §错误约定 409 | 仅描述后端返回 | 链接到前端 spec §2.4 的 confirm/replace 流程 |
 
 ### v0.5 → v0.5.1（前端接入后）
 

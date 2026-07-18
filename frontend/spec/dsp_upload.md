@@ -39,7 +39,7 @@
       └─ 左：<h1>{{ route.meta.title }}</h1>  ← "DSP 上传"
     </AppHeader>
     <AppMain>
-      <DspUploadView>   ← max-width 720px
+      <DspUploadView>   ← max-width 960px (v0.5.2 起 720→960)
         <h2 class="page-title">DSP 上传</h2>
         <p class="page-hint">…</p>
         ┌─ 上传卡片 ──────────────────────────────────────────────────┐
@@ -146,22 +146,25 @@
 
 | 阶段 | 内容 |
 |------|------|
-| 操作前 | 3 段输入框 disabled；按钮「载入」disabled |
+| 操作前 | 3 段输入框 disabled（未选文件）；按钮「载入」disabled（缺 version_date）|
 | 触发动作 | input.change 事件 |
 | 校验 | `.xlsx` 后缀（前端短路）；非 `.xlsx` → toast「仅支持 .xlsx 文件」并保持现有状态 |
 | 解析 | 调 `store.selectFile(file)` → 内部 `parseFilename(file.name)` |
+| **v0.5.2 新**：hasResult=true 状态 | `selectFile` 入口先清空 `uploadResult / rows / rowsTotal / rowsPage / rowsSize / rowsLoading / form.version_date / error`，再走解析路径 → 结果卡消失，进入新一轮 |
 | 解析成功 | store 写入：`selectedFile = file`、`form.vendor/item/sub_item = parsed.*`、`initialParsed = {…}` |
 | 解析失败（< 3 段） | toast「文件名解析失败，请确保文件名 ≥ 3 段（按 - 分隔）」；`selectedFile = null`；3 段 form 清空 |
-| 校验副作用 | 3 段输入框由 disabled 变为 enabled；按钮「载入」仍 disabled（缺 version_date） |
+| 校验副作用 | 3 段输入框由 disabled 变为 enabled（**只要选过文件就一直 enabled；上传成功也不会再被锁**）；按钮「载入」按 canSubmit 控制 |
 
 ### 2.3 功能点：编辑 4 个 Form 字段
 
+**v0.5.2 修订**：4 字段在「载入」成功后**保持 enabled**（不再被 `store.hasResult` 锁死）。`disabled` 条件仅「未选文件」一项。这样用户可以在看到上一批结果时立即开始编辑下一批参数，不必先点「重置」。
+
 | 字段 | 必填 | 校验 | 触发 | disabled 条件 |
 |------|------|------|------|----------------|
-| vendor | 是 | 1-64 字符（maxlength 控制 + blur 校验消息）| `blur` + `submit` | !hasFile \|\| formDisabled |
-| item | 是 | 1-128 字符 | `blur` + `submit` | 同上 |
-| sub_item | 是 | 1-128 字符 | `blur` + `submit` | 同上 |
-| version_date | 是 | YYYY-MM-DD；≤ 今天（含）| `change` + `submit` | 同上 |
+| vendor | 是 | 1-64 字符（maxlength 控制 + blur 校验消息）| `blur` + `submit` | !hasFile |
+| item | 是 | 1-128 字符 | `blur` + `submit` | !hasFile |
+| sub_item | 是 | 1-128 字符 | `blur` + `submit` | !hasFile |
+| version_date | 是 | YYYY-MM-DD；≤ 今天（含）| `change` + `submit` | !hasFile |
 
 `formDisabled = uploading || hasResult` —— 一旦「载入」成功，整个上半 form 不可改。
 
@@ -180,20 +183,34 @@
 | 操作前 | 表单 4 字段已填，文件已选 |
 | 触发动作 | 点击「载入」|
 | 前端校验 | `el-form.validate()`：任一必填字段失败 → 字段红字 + 按钮恢复可用（不弹 toast） |
-| 接口请求 | `POST /api/dsp-uploads` FormData：`file` + `vendor` + `item` + `sub_item` + `version_date` |
-| 成功逻辑（201） | toast「载入成功，共 N 条数据」；上半 form 全部 disabled；下方结果卡片 fade-in；store 自动触发 `loadResultRows(1, 50)` 拉预览 |
+| 接口请求（v0.5.2 主路径） | `POST /api/dsp-uploads` FormData：`file` + `vendor` + `item` + `sub_item` + `version_date` |
+| 成功逻辑（201） | toast「载入成功，共 N 条数据」；上方 form 保持 enabled；下方结果卡片 fade-in；store 自动触发 `loadResultRows(1, 50)` 拉预览 |
 | 失败（400 / 413 / 415 / 422 / 5xx） | `ElMessage.error(detail)`（detail 由 axios 拦截器 humanize 为字符串） |
-| 失败（409） | `ElMessageBox.alert(detail, '无法操作', { type: 'warning' })`（沿用 `client.showApiError`） |
+| 失败（404 / 其它业务码） | 同上 |
 | 失败（网络 / timeout） | `ElMessage.error('网络异常，请稍后重试')` |
 
-#### 按钮状态
+#### 409「版本已存在」分支（v0.5.2 新增）
+
+| 阶段 | 内容 |
+|------|------|
+| 操作前 | 首次 POST 命中唯一键约束 |
+| 接口响应 | 409 + detail `"version (vendor=A, item=B, sub_item=C, version_date=YYYY-MM-DD) already uploaded (upload_id=N)"` |
+| 解析 detail | 正则 `/upload_id=(\d+)/` 取出 `N`；取不到时降级 `ElMessageBox.alert` 路径（同 v0.5.1 行为） |
+| 用户弹窗 | `ElMessageBox.confirm('该版本（vendor / item / sub_item / version_date）已存在。\n是否替换？替换将先清空当前批次的全部事实行再重新导入。', '数据已存在', { type: 'warning', confirmButtonText: '替换', cancelButtonText: '取消' })` |
+| 用户选「替换」 | 调 `store.replaceAndUpload(oldId)` → DELETE `/api/dsp-uploads/{id}`（CASCADE 清事实行）→ 重发 POST |
+| 替换成功 | toast「替换成功，共 N 条数据」；store.uploadResult 更新；下方结果卡刷新 |
+| 替换过程中 DELETE 失败 | `ElMessage.error(detail)`；表单保留原值，用户可手动再次尝试或先选新文件 |
+| 用户选「取消」 | 表单状态保留；4 字段保留当前值；结果不动；可在 UI 内修改后再「载入」（重试会再次 409） |
+
+#### 按钮状态（v0.5.2）
 | 场景 | 「载入」 | 「重置」 |
 |------|---------|---------|
 | 初始（无文件） | disabled | 可点 |
 | 已选文件，未填 version_date | disabled | 可点 |
 | 4 字段齐全 | 可点 | 可点 |
-| 提交中 | loading + disabled | disabled |
-| 上传成功 | disabled（formDisabled=true）| 可点 |
+| 提交中（含替换 retry）| loading + disabled | disabled |
+| 上传成功 | 可点（4 字段 enabled，可继续编辑或再选文件 → 替换 / 新批次） | 可点 |
+| 替换确认弹窗中 | disabled | disabled |
 | 重置后 | 回初始 | 初始状态 |
 
 ### 2.5 功能点：结果区预览（v0.5.1 新增）
@@ -258,6 +275,10 @@
 | 移除文件 | 「移除」 |
 | 提交 | 「载入」 |
 | 提交成功 | 「载入成功，共 N 条数据」 |
+| 替换成功（v0.5.2） | 「替换成功，共 N 条数据」 |
+| 409 替换确认弹窗标题 | 「数据已存在」 |
+| 409 替换确认弹窗内容 | 「该版本（vendor / item / sub_item / version_date）已存在。\n是否替换？替换将先清空当前批次的全部事实行再重新导入。」 |
+| 409 替换确认弹窗按钮 | confirmButtonText=「替换」 / cancelButtonText=「取消」 |
 | 重置 | 「重置」 |
 | 重置二次确认 | 「重置会清空已载入的 N 条数据，确定吗？」 |
 | 结果区顶部 | 「✓ 已载入 {N} 条数据」 |
@@ -298,13 +319,17 @@
 
 | 用例 | 期望 |
 |------|------|
-| `selectFile(valid)` | 自动填 form；snapshot initialParsed |
-| `selectFile(<3 段)` | selectedFile = null；form 清空；error 写入 |
+| `selectFile(valid)`（无 uploadResult）| 自动填 form；snapshot initialParsed |
+| `selectFile(<3 段)` | selectedFile = null；form 清空 |
 | `selectFile(null)` | 清空 |
+| **`selectFile(hasResult=true)`（v0.5.2）** | 入口先清 `uploadResult / rows / rowsTotal / rowsPage / rowsSize / rowsLoading / form.version_date / error`；再走解析路径；3 段由新文件解析填入 |
+| **`selectFile(hasResult=true 且解析失败)`（v0.5.2）** | 旧 uploadResult 等已清空；新 selectedFile = null；3 段保持空 |
+| **`formDisabled` getter 已删除（v0.5.2）** | 不存在；字段 enabled 条件仅看 `hasFile` |
 | `canSubmit` getter | 4 字段齐全 → true；任一缺 / version_date 格式错 → false |
 | `submitUpload` 201 | uploadResult 写入；rows 自动拉取 |
-| `submitUpload` 409 | error 写入；不抛 |
+| `submitUpload` 409 | error 写入；不抛；返回 `{ok:false, error:ApiError(status:409)}` |
 | `submitUpload` 未选文件 | ok=false；不上传 |
+| **`replaceAndUpload(uploadId)`（v0.5.2）** | DELETE 调 + 清空 uploadResult/rows + 重发 submitUpload；成功 → 新 uploadResult；DELETE 失败 → 不重发 + error 透传 |
 | `reset` | 全清回初态 |
 | `hasEditedMeta` | 与 initialParsed 不一致 → true |
 
@@ -316,7 +341,9 @@
 | 初始 canSubmit | false |
 | 选文件 + version_date → canSubmit | true |
 | 上传成功 → 结果卡 | .result-card 出现；el-table 有数据 |
-| 409 错误 → 状态 | store.error 写入；view 不崩 |
+| 409 错误：用户选「替换」→ confirm + DELETE + POST + 成功（v0.5.2） | store.uploadResult 更新；store 调用 1 次 delete + 2 次 POST（一次 409、一次 201）；toast「替换成功，共 N 条」 |
+| 409 错误：用户选「取消」（v0.5.2） | store.uploadResult 仍为 null；不调 DELETE；表单状态保留 |
+| 409 错误：detail 不含 upload_id 退化路径 | 走 `ElMessageBox.alert`（同 v0.5.1 行为） |
 | 全清 → reset | selectedFile / form / uploadResult 全 null/empty |
 
 ---
@@ -327,20 +354,24 @@
 - 不实现事实行编辑（按后端 spec §不实现的组件「只能整批删除后重传」）；
 - 不在路由切换时自动 `store.reset()`（用户决定何时清）；
 - el-upload 组件**没有采用** Element Plus 的 `<el-upload>` —— 直接用原生隐藏 `<input type="file">`，简化文件名校验与 store 联动；
-- 不引入拖拽上传（v0.5.1 仅点击触发）。
+- 不引入拖拽上传（v0.5.2 仅点击触发）；
+- v0.5.2 起「重置」不再强制——选新文件即隐式重置；保留按钮作为手动清理入口。
 
 ---
 
 ## 7. 验证清单（每 PR）
 
-- [x] `npm test` 全绿（vitest 32 测）
-- [x] 后端 `pytest backend/tests` 全绿（193+ / 含 v0.5.1 新增 1 测）
+- [x] `npm test` 全绿（vitest 36+ 测）
+- [x] 后端 `pytest backend/tests` 全绿（194 / 0 改动）
 - [x] `frontend/src/views/DspUpload.vue` / `stores/useDspUploadStore.js` / `utils/dspFilename.js` 全部有 docstring（JSDoc 中文）
 - [x] 侧边栏第 3 项 `DSP 上传` 显示并跳 `/dsp-uploads`
+- [x] 页面 max-width = 960px（720 → 960 v0.5.2）
 - [x] 上传成功后页面下方出现 el-table 预览
-- [x] 上传成功后改任一字段不再触发新上传（formDisabled）
+- [x] 上传成功后 4 字段保持 enabled（不再 formDisabled）
 - [x] 点重置时 store.hasResult 状态下走二次确认
 - [x] 缺任一必填字段被 el-form validate 拦下，不发请求
+- [x] 409 + 用户选「替换」→ DELETE + POST 完成，结果卡刷新
+- [x] 409 + 用户选「取消」→ 表单保留，不调 DELETE
 
 ---
 
@@ -348,10 +379,20 @@
 
 | 版本 | 章节 | 修订 |
 |------|------|------|
+| **v0.5.2** | §1.3 | 宽度 720 → 960（页面更宽以容纳预览区） |
+| v0.5.2 | §2.2 | `selectFile` 在 `hasResult=true` 时自动清 uploadResult/rows/version_date（隐式重置）|
+| v0.5.2 | §2.3 | 4 字段 disabled 条件由 `!hasFile \|\| formDisabled` 简化为 `!hasFile`；`formDisabled` 概念删除 |
+| v0.5.2 | §2.4 | 新增 409 分支：解析 detail → ElMessageBox.confirm → replaceAndUpload（DELETE + 重发 POST）/ 取消 |
+| v0.5.2 | §2.4 | 「载入」成功后 4 字段保持 enabled |
+| v0.5.2 | §2.6 | 「重置」语义不变；与隐式重置（选新文件）并存 |
+| v0.5.2 | §4 | 新增「替换成功」/「数据已存在」/「替换」相关 toast & confirm 文案 |
+| v0.5.2 | §5.3 / §5.4 | 测试计划追加 store / view 各 2 个 case |
+| v0.5.2 | §6 | 明确「重置不再强制」 |
+| v0.5.2 | §7 | 删除 formDisabled 验证项；新增 960 / 隐式重置 / 409 替换 / 409 取消 4 个验证项 |
 | **v0.5.1** | §1.2 | 侧边栏第 3 项「DSP 上传」新增 |
 | v0.5.1 | §1.3 | 上半 form 4 字段全部必填；下半结果卡片为新增 |
 | v0.5.1 | §2.2 | 自动解析 `/ 字段可编辑` 联动 |
-| v0.5.1 | §2.4 | 「载入」成功后整个上半 form disabled |
+| v0.5.1 | §2.4 | 「载入」成功后整个上半 form disabled（v0.5.2 撤回）|
 | v0.5.1 | §2.5 | 结果预览 50 条 + 分页（**新增**） |
 | v0.5.1 | §2.6 | 重置：hasResult 时二次确认 |
 | v0.5.1 | §5 | 测试计划引入 vitest 框架 |
