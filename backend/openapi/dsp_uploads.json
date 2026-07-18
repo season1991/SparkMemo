@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "SparkMemo",
-    "version": "0.5.0",
-    "description": "SparkMemo v0.5 — DSP upload module added on top of v0.4."
+    "version": "0.5.1",
+    "description": "SparkMemo v0.5 → v0.5.1: DSP upload POST API now requires 4 form fields (vendor/item/sub_item/version_date)."
   },
   "paths": {
     "/api/companies": {
@@ -1273,7 +1273,7 @@
           "dsp-uploads"
         ],
         "summary": "Upload Endpoint",
-        "description": "接收 multipart/form-data 上传：file + version_date。\n\n处理顺序：\n1. 校验 version_date 格式 → 400\n2. 校验 MIME / size → 415 / 413\n3. 读取字节流到内存 → parse_filename → parse_excel\n4. 重传冲突检测 → 409\n5. INSERT 批次元数据 → bulk INSERT 事实行\n\n参数:\n    file: 浏览器上传的 `.xlsx` 文件；MIME 必须为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。\n    version_date: 用户输入的批次版本日期，10 字符 `YYYY-MM-DD`。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    DspUploadRead: 新建批次的元数据响应（含 vendor / item / sub_item / version_date / row_count / created_at）。\n\n异常:\n    HTTPException 400: version_date 非法 / 文件名 < 3 段 / quantity 非数字或非整数浮点。\n    HTTPException 413: 文件 > 20 MB。\n    HTTPException 415: MIME 不是 .xlsx。\n    HTTPException 422: Sheet `DSP` 不存在。\n    HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。",
+        "description": "接收 multipart/form-data 上传：file + 4 个业务字段。\n\n业务字段约定（v0.5.1 升级）：\n- `vendor / item / sub_item` 由前端解析文件名后填写、并允许用户在 UI 内修改后再 POST；\n- 后端**不再**从 `file.filename` 回退解析——这意味着 v0.5 引入的 `parse_filename` 函数降级为冗余 / 备用工具，仅供脚本或命令行调试使用；\n- 缺这 4 个字段中任一项 → 由 FastAPI 自动 422。\n\n处理顺序：\n1. 校验 version_date 格式 → 400（缺字段由 FastAPI 在更早阶段 422）\n2. 校验 MIME / size → 415 / 413\n3. 读取字节流到内存 → parse_excel\n4. 重传冲突检测 → 409\n5. INSERT 批次元数据 → bulk INSERT 事实行\n\n参数:\n    file: 浏览器上传的 `.xlsx` 文件；MIME 必须为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。\n    vendor: 供应商；1-64 字符；由前端解析/编辑后传入。\n    item: 业务项；1-128 字符；由前端解析/编辑后传入。\n    sub_item: 子业务项；1-128 字符；由前端解析/编辑后传入。\n    version_date: 用户输入的批次版本日期，10 字符 `YYYY-MM-DD`。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    DspUploadRead: 新建批次的元数据响应（含 vendor / item / sub_item / version_date / row_count / created_at）。\n\n异常:\n    HTTPException 400: version_date 非法 / quantity 非数字或非整数浮点。\n    HTTPException 413: 文件 > 20 MB。\n    HTTPException 415: MIME 不是 .xlsx。\n    HTTPException 422: Sheet `DSP` 不存在；或任一必填 Form 字段缺失。\n    HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。",
         "operationId": "upload_endpoint_api_dsp_uploads_post",
         "requestBody": {
           "required": true,
@@ -1462,6 +1462,18 @@
             "format": "binary",
             "title": "File"
           },
+          "vendor": {
+            "type": "string",
+            "title": "Vendor"
+          },
+          "item": {
+            "type": "string",
+            "title": "Item"
+          },
+          "sub_item": {
+            "type": "string",
+            "title": "Sub Item"
+          },
           "version_date": {
             "type": "string",
             "title": "Version Date"
@@ -1470,6 +1482,9 @@
         "type": "object",
         "required": [
           "file",
+          "vendor",
+          "item",
+          "sub_item",
           "version_date"
         ],
         "title": "Body_upload_endpoint_api_dsp_uploads_post"

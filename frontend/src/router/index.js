@@ -9,6 +9,7 @@ import Dashboard from '../views/Dashboard.vue'
 import TaskList from '../views/TaskList.vue'
 import Settings from '../views/Settings.vue'
 import EmailConfig from '../views/EmailConfig.vue'
+import DspUpload from '../views/DspUpload.vue'
 
 const routes = [
   {
@@ -28,6 +29,12 @@ const routes = [
     name: 'TaskListToday',
     component: TaskList,
     meta: { remindToday: true, title: '今日待提醒' }
+  },
+  {
+    path: '/dsp-uploads',
+    name: 'DspUpload',
+    component: DspUpload,
+    meta: { title: 'DSP 上传' }
   },
   {
     path: '/email-config',

@@ -1,8 +1,13 @@
 # DSP Excel 上传入库模块规格
 
-> 适配规格：SparkMemo v0.5
+> 适配规格：SparkMemo v0.5 → v0.5.1
 > 适用范围：单用户本地版，无登录。
 > **数据库可移植性约束**：所有日期字段统一使用 10 字符字符串 `YYYY-MM-DD`；不依赖任何数据库内置日期函数（沿用既有项目约定，详见 `task_management.md` §约束）。
+
+> **v0.5.1 重要变更**：POST /api/dsp-uploads 升级为接收 **4 个必填** Form 字段（`vendor / item / sub_item / version_date`）。
+> - v0.5 的 `parse_filename(filename)` 降级为**冗余 / 备用工具**（函数保留），不再被 POST 调用；
+> - 前端要求在 UI 内解析文件名（按 `-` 切分取前 3 段）并允许用户编辑后传递 4 个 Form 字段；
+> - 缺任一 Form 字段由 FastAPI 自动 422。
 
 ---
 
@@ -232,12 +237,19 @@ for c in range(13, ws.max_column + 1):
 | GET    | `/api/dsp-uploads/{id}/rows?page=&size=` | 批次内事实行分页 |
 | DELETE | `/api/dsp-uploads/{id}` | 整批删除（CASCADE） |
 
-### POST /api/dsp-uploads 入参（multipart/form-data）
+### POST /api/dsp-uploads 入参（multipart/form-data）— v0.5.1
 
 | 字段 | 类型 | 必填 | 校验 |
 |------|------|------|------|
 | `file` | File | 是 | `.xlsx`；MIME = `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`；size ≤ 20 MB |
-| `version_date` | string | 是 | `YYYY-MM-DD` |
+| `vendor` | string | **是** | 1-64 字符；与前端解析/编辑结果一致 |
+| `item` | string | **是** | 1-128 字符 |
+| `sub_item` | string | **是** | 1-128 字符 |
+| `version_date` | string | **是** | `YYYY-MM-DD` |
+
+> v0.5 → v0.5.1 变更：`vendor / item / sub_item` 由「可选（从文件名回退解析）」改为「必填（来自前端 Form）」。`parse_filename` 函数保留但**不再被本路由调用**。
+>
+> 缺任一必填字段 → FastAPI 自动 `422 Unprocessable Entity`（不是 400，因为这是 Form 必填校验，由 `Form(...)` 在依赖注入阶段触发）。
 
 ### POST 成功响应 201
 
@@ -295,12 +307,12 @@ for c in range(13, ws.max_column + 1):
 
 | HTTP | 场景 |
 |------|------|
-| 400 | 文件名 < 3 段；`version_date` 非 `YYYY-MM-DD`；`quantity` 含非数字字符串 / 非整数浮点 |
+| 400 | `version_date` 非 `YYYY-MM-DD`；`quantity` 含非数字字符串 / 非整数浮点 |
 | 404 | 批次不存在 |
 | 409 | 同 `(vendor, item, sub_item, version_date)` 已存在 |
 | 413 | 文件 > 20 MB |
 | 415 | MIME 非 `.xlsx` |
-| 422 | Sheet `DSP` 不存在 |
+| 422 | Sheet `DSP` 不存在；任一必填 Form 字段缺失 |
 
 ---
 
@@ -393,6 +405,17 @@ for c in range(13, ws.max_column + 1):
 ---
 
 ## 修订记录（相对原版）
+
+### v0.5 → v0.5.1（前端接入后）
+
+| 章节 | v0.5（首次发布） | v0.5.1（前端接入） |
+|------|---------|---------|
+| POST 入参 | `file` + `version_date`；`vendor / item / sub_item` 由后端从文件名解析 | `file` + **4 个必填 Form**：`vendor / item / sub_item / version_date` |
+| `parse_filename` 函数 | POST 调用 | **保留但不被 POST 调用**（标记为冗余 / 备用） |
+| 错误约定 400 | 含「文件名 < 3 段」 | 移除（前端已在前置校验） |
+| 错误约定 422 | 仅「Sheet 'DSP' 不存在」 | **追加**「任一必填 Form 字段缺失」 |
+
+### v0.4 → v0.5（首次发布）
 
 | 章节 | 原版问题 | 修订 |
 |------|----------|------|

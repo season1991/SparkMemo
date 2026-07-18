@@ -4,12 +4,15 @@
  * 激活态：route.path 命中项，左 3px 主色竖条 + 浅主色背景 + 主色文字。
  * 样式遵循 spec/README.md §5.2：宽 220px，Logo 区 64px，导航项 44px × N，间距 4px。
  *
- * v0.3 email_config 模块新增「邮箱配置」第三项；其余旧路径
- * （/tasks/today / /settings）保留可达但不在此处显示。
+ * 版本演进：
+ * - v0.3 email_config 模块新增「邮箱配置」第三项；
+ * - v0.5.1 dsp_upload 模块在「任务管理」「邮箱配置」之间插入「DSP 上传」。
+ *
+ * 其余旧路径（/tasks/today / /settings）保留可达但不在此处显示。
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, List, Message } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Message, Upload } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +20,7 @@ const router = useRouter()
 const navItems = [
   { name: '今日概述', icon: DataAnalysis, to: '/' },
   { name: '任务管理', icon: List, to: '/tasks' },
+  { name: 'DSP 上传', icon: Upload, to: '/dsp-uploads' },
   { name: '邮箱配置', icon: Message, to: '/email-config' }
 ]
 

@@ -319,7 +319,12 @@ async def test_post_upload_201_success(client, db):
 
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026-07-15",
+        },
         files={"file": _xlsx_file(wb)},
     )
     assert response.status_code == 201, response.text
@@ -349,23 +354,56 @@ async def test_post_upload_400_version_date_bad_format(client):
     wb = _build_workbook(rows_data=[], week_cols=[])
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026/07/15"},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026/07/15",
+        },
         files={"file": _xlsx_file(wb)},
     )
     assert response.status_code == 400
     assert "YYYY-MM-DD" in response.json()["detail"]
 
 
-async def test_post_upload_400_filename_too_few_segments(client):
+async def test_post_upload_422_missing_form_field(client):
+    """v0.5.1：四个 Form 字段全部必填，缺一个由 FastAPI 自动 422。"""
     rows = [{4: "X", 5: "机箱", 6: "X", 10: "Demand", 11: 4, 13: 5}]
     wb = _build_workbook(rows_data=rows, week_cols=[("WK01", "2024-12-30")])
+    # 故意漏掉 sub_item
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
-        files={"file": _xlsx_file(wb, filename="foo-bar.xlsx")},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "version_date": "2026-07-15",
+        },
+        files={"file": _xlsx_file(wb)},
     )
-    assert response.status_code == 400
-    assert "segments" in response.json()["detail"]
+    assert response.status_code == 422
+
+
+async def test_post_upload_accepts_user_edited_vendor_item_sub_item(client, db):
+    """v0.5.1：用户在前端编辑后的 vendor/item/sub_item 会落地，与文件名解析路径无关。"""
+    rows = [{4: "X", 5: "机箱", 6: "X", 10: "Demand", 11: 4, 13: 5}]
+    wb = _build_workbook(rows_data=rows, week_cols=[("WK01", "2024-12-30")])
+    # 文件名是 Arista-X-Y-061626.xlsx，但上传时改 sub_item 为 "Z"
+    response = await client.post(
+        "/api/dsp-uploads",
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Z",       # 故意改
+            "version_date": "2026-07-15",
+        },
+        files={"file": _xlsx_file(wb)},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["vendor"] == "Arista"
+    assert body["item"] == "X"
+    assert body["sub_item"] == "Z"        # 后端以 Form 传入值为准
+    assert body["source_filename"] == "Arista-X-Y-061626.xlsx"  # 文件名仅审计
 
 
 async def test_post_upload_400_quantity_nonnumeric(client):
@@ -374,7 +412,12 @@ async def test_post_upload_400_quantity_nonnumeric(client):
     wb = _build_workbook(rows_data=rows, week_cols=[("WK01", "2024-12-30")])
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026-07-15",
+        },
         files={"file": _xlsx_file(wb)},
     )
     assert response.status_code == 400
@@ -385,7 +428,12 @@ async def test_post_upload_415_wrong_mime(client):
     wb = _build_workbook(rows_data=[], week_cols=[])
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026-07-15",
+        },
         files={"file": ("Arista-X-Y-061626.xlsx", wb.getvalue(), "text/plain")},
     )
     assert response.status_code == 415
@@ -406,7 +454,12 @@ async def test_post_upload_413_oversize(monkeypatch, client):
     payload_bytes = bio.getvalue() + b"\x00" * 1024  # 超过 1024 阈值
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026-07-15",
+        },
         files={"file": ("Arista-X-Y-061626.xlsx", payload_bytes,
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
@@ -417,10 +470,16 @@ async def test_post_upload_409_duplicate_version(client):
     """同 (vendor, item, sub_item, version_date) 重传 → 409，detail 含 upload_id。"""
     rows = [{4: "X", 5: "机箱", 6: "X", 10: "Demand", 11: 4, 13: 5}]
     wb = _build_workbook(rows_data=rows, week_cols=[("WK01", "2024-12-30")])
+    payload = {
+        "vendor": "Arista",
+        "item": "X",
+        "sub_item": "Y",
+        "version_date": "2026-07-15",
+    }
 
     r1 = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data=payload,
         files={"file": _xlsx_file(wb)},
     )
     assert r1.status_code == 201
@@ -428,7 +487,7 @@ async def test_post_upload_409_duplicate_version(client):
 
     r2 = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data=payload,
         files={"file": _xlsx_file(wb)},
     )
     assert r2.status_code == 409
@@ -441,7 +500,12 @@ async def test_post_upload_422_wrong_sheet(client):
     wb = _build_workbook(rows_data=[], week_cols=[], sheet_name="Sheet1")
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data={
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_date": "2026-07-15",
+        },
         files={"file": _xlsx_file(wb)},
     )
     assert response.status_code == 422
@@ -451,10 +515,16 @@ async def test_post_upload_then_resubmit_after_delete_succeeds(client):
     """删除后可以重传同版本（验证 409 仅在存在时阻断）。"""
     rows = [{4: "X", 5: "机箱", 6: "X", 10: "Demand", 11: 4, 13: 5}]
     wb = _build_workbook(rows_data=rows, week_cols=[("WK01", "2024-12-30")])
+    payload = {
+        "vendor": "Arista",
+        "item": "X",
+        "sub_item": "Y",
+        "version_date": "2026-07-15",
+    }
 
     r1 = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data=payload,
         files={"file": _xlsx_file(wb)},
     )
     assert r1.status_code == 201
@@ -465,12 +535,13 @@ async def test_post_upload_then_resubmit_after_delete_succeeds(client):
 
     r2 = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data=payload,
         files={"file": _xlsx_file(wb)},
     )
     assert r2.status_code == 201
     # 二次插入的 version_date 相同即可（id 可能复用，autoincrement 行为依赖方言）
     assert r2.json()["version_date"] == "2026-07-15"
+    assert r2.json()["vendor"] == "Arista"
 
 
 # ---------- §4. GET 列表 / 详情 / 行分页 ----------
@@ -606,7 +677,12 @@ async def test_real_file_regression(client):
 
     response = await client.post(
         "/api/dsp-uploads",
-        data={"version_date": "2026-07-15"},
+        data={
+            "vendor": "Arista",
+            "item": "网络设备DSP横版",
+            "sub_item": "机箱",
+            "version_date": "2026-07-15",
+        },
         files={"file": (
             "Arista-网络设备DSP横版-机箱-061626.xlsx",
             content,

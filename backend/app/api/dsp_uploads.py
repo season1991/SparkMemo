@@ -1,12 +1,17 @@
-"""/api/dsp-uploads 路由（v0.5）。
+"""/api/dsp-uploads 路由（v0.5 → v0.5.1）。
 
 错误约定（与 spec §错误约定 一一对应）：
-- 400：文件名 < 3 段；version_date 非 YYYY-MM-DD；quantity 含非数字 / 非整数浮点
+- 400：version_date 非 YYYY-MM-DD；quantity 含非数字 / 非整数浮点
 - 404：批次不存在
 - 409：同 (vendor, item, sub_item, version_date) 已存在
 - 413：文件 > 20 MB
 - 415：MIME 非 .xlsx
-- 422：Sheet 'DSP' 不存在
+- 422：Sheet 'DSP' 不存在；任一必填 Form 字段缺失
+
+v0.5.1 变更：POST /api/dsp-uploads 升级为接收 4 个**必填** Form 字段（vendor / item /
+sub_item / version_date）；不再调用 `parse_filename` 从文件名回退解析——文件名解析
+逻辑迁至前端。本路由不再 import `parse_filename`，仅保留调用以 `parse_excel` 为核心
+的解析路径。
 """
 from __future__ import annotations
 
@@ -27,7 +32,6 @@ from app.services.dsp_parser import (
     BadQuantityError,
     SheetMissingError,
     parse_excel,
-    parse_filename,
 )
 
 
@@ -113,20 +117,31 @@ def list_uploads_endpoint(
 @router.post("", response_model=DspUploadRead, status_code=201)
 async def upload_endpoint(
     file: UploadFile = File(...),
+    vendor: str = Form(...),
+    item: str = Form(...),
+    sub_item: str = Form(...),
     version_date: str = Form(...),
     db=Depends(get_db),
 ):
-    """接收 multipart/form-data 上传：file + version_date。
+    """接收 multipart/form-data 上传：file + 4 个业务字段。
+
+    业务字段约定（v0.5.1 升级）：
+    - `vendor / item / sub_item` 由前端解析文件名后填写、并允许用户在 UI 内修改后再 POST；
+    - 后端**不再**从 `file.filename` 回退解析——这意味着 v0.5 引入的 `parse_filename` 函数降级为冗余 / 备用工具，仅供脚本或命令行调试使用；
+    - 缺这 4 个字段中任一项 → 由 FastAPI 自动 422。
 
     处理顺序：
-    1. 校验 version_date 格式 → 400
+    1. 校验 version_date 格式 → 400（缺字段由 FastAPI 在更早阶段 422）
     2. 校验 MIME / size → 415 / 413
-    3. 读取字节流到内存 → parse_filename → parse_excel
+    3. 读取字节流到内存 → parse_excel
     4. 重传冲突检测 → 409
     5. INSERT 批次元数据 → bulk INSERT 事实行
 
     参数:
         file: 浏览器上传的 `.xlsx` 文件；MIME 必须为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。
+        vendor: 供应商；1-64 字符；由前端解析/编辑后传入。
+        item: 业务项；1-128 字符；由前端解析/编辑后传入。
+        sub_item: 子业务项；1-128 字符；由前端解析/编辑后传入。
         version_date: 用户输入的批次版本日期，10 字符 `YYYY-MM-DD`。
         db: FastAPI 注入的数据库 Session。
 
@@ -134,10 +149,10 @@ async def upload_endpoint(
         DspUploadRead: 新建批次的元数据响应（含 vendor / item / sub_item / version_date / row_count / created_at）。
 
     异常:
-        HTTPException 400: version_date 非法 / 文件名 < 3 段 / quantity 非数字或非整数浮点。
+        HTTPException 400: version_date 非法 / quantity 非数字或非整数浮点。
         HTTPException 413: 文件 > 20 MB。
         HTTPException 415: MIME 不是 .xlsx。
-        HTTPException 422: Sheet `DSP` 不存在。
+        HTTPException 422: Sheet `DSP` 不存在；或任一必填 Form 字段缺失。
         HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。
     """
     _validate_yyyy_mm_dd(version_date)
@@ -150,10 +165,6 @@ async def upload_endpoint(
         raise HTTPException(status_code=413, detail="file exceeds 20 MB limit")
 
     filename = file.filename or ""
-    try:
-        vendor, item, sub_item = parse_filename(filename)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         fact_rows = parse_excel(content)

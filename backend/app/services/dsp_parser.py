@@ -69,6 +69,14 @@ def parse_filename(filename: str) -> tuple[str, str, str]:
     """截掉扩展名后按 '-' 切分，返回前 3 段；段数 < 3 抛 ValueError。
 
     实现严格按 spec 给出的伪代码。
+
+    **状态（v0.5.1）**：此函数**不再被** `POST /api/dsp-uploads` 调用——
+    前端要求用户在 UI 内提供 vendor / item / sub_item，服务端仅校验与入库。
+    本函数保留供以下场景使用：
+    - 导入 / 迁移遗留脚本（spec 预留的「其他调用者」）；
+    - 命令行调试工具；
+    - 单元测试覆盖同名 spec §Test Plan §1 时的引用。
+    后续如确认所有调用方都已迁移到 Form 字段，可安全删除本函数。
     """
     if not filename:
         raise ValueError("filename is required")
