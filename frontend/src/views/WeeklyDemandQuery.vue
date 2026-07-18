@@ -359,6 +359,7 @@ onMounted(() => {
         <el-table-column prop="country" label="Country" width="110" />
         <el-table-column prop="category" label="Category" width="100" />
         <el-table-column prop="config_code" label="Config Code" width="140" />
+        <el-table-column prop="config_name" label="Config Name" width="160" />
         <el-table-column prop="data_type" label="Data Type" width="100" />
         <el-table-column prop="ttl" label="TTL" width="60" />
         <el-table-column prop="ym" label="年月" width="90" />

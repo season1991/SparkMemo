@@ -10,6 +10,11 @@
 > - 删除：`views/WeeklyDemandDelete.vue`（路由 `/dsp-uploads/delete`）
 > 全局规则遵循 [./README.md](./README.md)；本文档只描述本模块特有的页面拆解、功能点交互与测试案例。
 
+> **v0.5.5 前端侧变更**（摘要）：
+>
+> 1. **Config Name 字段入库**：表格列从 9 列增加到 10 列（新增 `config_name` 列）。
+> 2. 其余 v0.5.4 行为保持不变。
+
 > **v0.5.4 前端侧变更**（摘要）：
 >
 > 1. **模块重命名**：`DSP 上传` → `周需求管理`；侧边栏第 3 项改名 + icon 维持 `Upload`。
@@ -99,8 +104,8 @@
         │     </div>                                                │
         │   </template>                                             │
         │   <el-table :data="store.rows" stripe>                    │
-        │     … 9 列：country / category / config_code / data_type /  │
-        │       ttl / ym / week / date / quantity                    │
+│     … 10 列：country / category / config_code / config_name /  │
+│       data_type / ttl / ym / week / date / quantity            │
         │   </el-table>                                             │
         │   <el-pagination v-if="total > size" :total="..."         │
         │                   :page-sizes="[20, 50, 100]"              │
@@ -241,7 +246,7 @@
 |------|------|
 | 触发动作 | 上传成功自动触发 `loadResultRows(1, 50)` |
 | 接口请求 | `GET /api/dsp-uploads/{id}/rows?page=1&size=50` |
-| 成功渲染 | `<el-table>` 9 列（country / category / config_code / data_type / ttl / ym / week / date / quantity）+ 顶部「✓ 已载入 N 条」+ 元信息 tag 4 个 |
+| 成功渲染 | `<el-table>` 10 列（country / category / config_code / config_name / data_type / ttl / ym / week / date / quantity）+ 顶部「✓ 已载入 N 条」+ 元信息 tag 4 个 |
 | 数据为空 | `el-table.empty-text`：「该批次无事实行（所有数据均被规则跳过）」 |
 | rowsLoading | 表格 `v-loading="store.rowsLoading"`，期间表格区显示骨架 |
 | 分页 | 仅 `store.rowsTotal > store.rowsSize`（>50）时显示；支持切换 size 20/50/100；最大页码取决于 total |
@@ -295,7 +300,7 @@
 | 用户选择子业务项 | 清空版本日期下拉框；调 `getDistinctVersionDates(vendor, item, sub_item)` → 填充版本日期下拉框 |
 | 用户选择版本日期 | 4 字段就绪；「查询」按钮 enabled |
 | 点「查询」| 调 `findBatchByVersion(form)` → `GET /api/dsp-uploads?vendor=&item=&sub_item=&version_date=&page=1&size=1` |
-| 命中（`items.length === 1`） | 弹出结果卡：批次元数据 (`vendor / item / sub_item / version_date / source_filename / row_count / created_at`) + `el-table` 9 列事实行前 50 条（与上传页结果卡同模板）；如果 `row_count > 50` 显示分页 |
+| 命中（`items.length === 1`） | 弹出结果卡：批次元数据 (`vendor / item / sub_item / version_date / source_filename / row_count / created_at`) + `el-table` 10 列事实行前 50 条（与上传页结果卡同模板）；如果 `row_count > 50` 显示分页 |
 | 未命中（`items.length === 0`） | toast「未找到该版本」；不弹结果卡；form 保留 |
 | 网络 / 5xx | 沿用 `client.showApiError(err)` |
 | 状态文案 | 「✓ 已找到 1 个批次，共 N 条事实行」/「未找到该版本」/「查询中…」 |

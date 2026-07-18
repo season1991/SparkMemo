@@ -43,13 +43,18 @@ DATA_TYPES_KEPT = ("Demand", "Supply")
 
 # 列头匹配目标；每个 key 是一组规范化别名，归一化后命中即停止遍历该列的所有 key。
 # 关键列缺失任意一个 → BadHeaderError（v0.5.3）
+# v0.5.5 新增 config_name（Config Name）列，可选列（缺失不报错，入库为 None）
 _HEADER_TARGETS: dict[str, tuple[str, ...]] = {
     "country":     ("country",),
     "category":    ("category",),
     "config_code": ("config code", "configcode"),  # 容错：'Config Code' / 'ConfigCode' / 'configcode'
+    "config_name": ("config name", "configname"),  # 可选列：'*Config Name' / 'Config Name' / 'ConfigName'
     "data_type":   ("data type", "datatype"),
     "ttl":         ("ttl",),
 }
+
+# 必填列：缺失任意一个 → BadHeaderError；config_name 为可选列，不在其中
+_REQUIRED_COLUMNS = {"country", "category", "config_code", "data_type", "ttl"}
 
 # YYYY-MM 模式：行 1 携带这种格式的 cell 视为 ym 段起点
 _YM_PATTERN = re.compile(r"^\d{4}-\d{2}$")
@@ -60,7 +65,8 @@ class SheetMissingError(Exception):
 
 
 class BadHeaderError(Exception):
-    """关键列（country/category/config_code/data_type/ttl）在行 1 缺失 → 路由层映射 422。"""
+    """关键列（country/category/config_code/data_type/ttl）在行 1 缺失 → 路由层映射 422。
+    config_name 为可选列，缺失时入库为 None，不报错。"""
 
 
 class BadQuantityError(Exception):
@@ -74,6 +80,7 @@ class FactRow:
     country: Optional[str]
     category: Optional[str]
     config_code: Optional[str]
+    config_name: Optional[str]
     data_type: Optional[str]
     ttl: Optional[int]
     ym: str
@@ -263,7 +270,7 @@ def parse_excel(content: bytes) -> list[FactRow]:
     try:
         # 1) 列头匹配（跳过隐藏列）
         cols = _resolve_columns(ws)
-        for required in _HEADER_TARGETS.keys():
+        for required in _REQUIRED_COLUMNS:
             if required not in cols:
                 wb.close()
                 raise BadHeaderError(
@@ -302,6 +309,9 @@ def parse_excel(content: bytes) -> list[FactRow]:
                 continue
 
             category = _cell_str(ws.cell(row=r, column=cols["category"]).value) or None
+            # config_name 为可选列（v0.5.5），缺失时入库为 None
+            config_name_col = cols.get("config_name")
+            config_name = _cell_str(ws.cell(row=r, column=config_name_col).value) or None if config_name_col else None
             ttl = _parse_ttl(ws.cell(row=r, column=cols["ttl"]).value)
 
             for c, week, date in week_cols:
@@ -316,6 +326,7 @@ def parse_excel(content: bytes) -> list[FactRow]:
                         country=country or None,
                         category=category,
                         config_code=config_code or None,
+                        config_name=config_name,
                         data_type=data_type,
                         ttl=ttl,
                         ym=ym_at_col[c],

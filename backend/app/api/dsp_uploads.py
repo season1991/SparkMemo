@@ -322,6 +322,7 @@ async def upload_endpoint(
                 "country": fr.country,
                 "category": fr.category,
                 "config_code": fr.config_code,
+                "config_name": fr.config_name,
                 "data_type": fr.data_type,
                 "ttl": fr.ttl,
                 "ym": fr.ym,

@@ -421,6 +421,7 @@ class DspUploadRowRead(BaseModel):
     country: Optional[str] = None
     category: Optional[str] = None
     config_code: Optional[str] = None
+    config_name: Optional[str] = None
     data_type: Optional[str] = None
     ttl: Optional[int] = None
     ym: str

@@ -62,6 +62,7 @@ upload_id    Mapped[int]    # FK -> dsp_uploads.id，ON DELETE CASCADE
 country      Mapped[str|None]  # 64；来源 col 4（去 `*`、strip）
 category     Mapped[str|None]  # 128；来源 col 5（strip）
 config_code  Mapped[str|None]  # 128；来源 col 6（strip）
+config_name  Mapped[str|None]  # 256；来源 col 7（去 `*`、strip），v0.5.5 新增
 data_type    Mapped[str|None]  # 64；来源 col 10（strip），仅 `Demand`/`Supply` 入库
 ttl          Mapped[int|None]  # 来源 col 11（int；非整数字符串视为空）
 ym            Mapped[str]    # 7，"2025-01"，非空
@@ -117,7 +118,7 @@ v0.5.3 之前的版本按字面列号硬编码（country=col 4、data_type=col 1
 | **4** | **D**   | `*Country`           | 静态 | `country` |
 | **5** | **E**   | `Category`           | 静态 | `category` |
 | **6** | **F**   | `Config Code`        | 静态 | `config_code` |
-| 7    | G        | `*Config Name`       | 丢弃 | — |
+| **7** | **G**   | `*Config Name`       | 静态 | `config_name`（v0.5.5 新增入库） |
 | 8    | H        | `Model`              | 丢弃 | — |
 | 9    | I        | `*Manufacturer`      | 丢弃 | — |
 | **10** | **J** | `Data Type`          | 静态 | `data_type`（过滤） |
@@ -125,7 +126,9 @@ v0.5.3 之前的版本按字面列号硬编码（country=col 4、data_type=col 1
 | **12** | **L** | `Update By`          | 参考；不强制 | —（不参与 v0.5.3 解析） |
 | **13+** | M+  | `2025-01` / 空 / `2025-02` / … | 周列 | `ym` (行 1) / `week` (行 2) / `date` (行 3) / `quantity` (行 4+) |
 
-> **明确丢弃 6 列**：`BU` / `Version` / `Region` / `Config Name` / `Model` / `Manufacturer`。`Update By` **不**在丢弃之列——它在 v0.5.3 之前充当静态列与周列之间的硬编码边界；v0.5.3 起**不再**作为边界——周列起点由行 1 中的 `YYYY-MM` 段起点自动识别（见 §`ym` 段识别）。
+> **明确丢弃 5 列**：`BU` / `Version` / `Region` / `Model` / `Manufacturer`。`Update By` **不**在丢弃之列——它在 v0.5.3 之前充当静态列与周列之间的硬编码边界；v0.5.3 起**不再**作为边界——周列起点由行 1 中的 `YYYY-MM` 段起点自动识别（见 §`ym` 段识别）。
+>
+> **v0.5.5 变更**：`Config Name`（col 7）从"丢弃"改为"入库"，字段名 `config_name`，可选列（缺失时入库为 None）。
 >
 > **行 1 表头文本不参与解析（v0.5.3 之前的硬约束，v0.5.3 反转）**：v0.5.3 行 1 表头**作为输入**驱动解析；不再按字面列号。
 
@@ -138,15 +141,16 @@ v0.5.3 之前的版本按字面列号硬编码（country=col 4、data_type=col 1
 3. **大小写不敏感**；
 4. **首匹配**：命中第一个满足的 cell 即停。
 
-`_HEADER_TARGETS` 字典（**关键列**，缺一即 `BadHeaderError` → 422）：
+`_HEADER_TARGETS` 字典（**关键列**，缺一即 `BadHeaderError` → 422；**可选列**缺失时不报错）：
 
-| 业务字段 | 归一化后匹配的别名（任一命中） |
-|----------|-------------------------------|
-| `country` | `country` |
-| `category` | `category` |
-| `config_code` | `config code`、`configcode` |
-| `data_type` | `data type`、`datatype` |
-| `ttl` | `ttl` |
+| 业务字段 | 归一化后匹配的别名（任一命中） | 是否必填 |
+|----------|-------------------------------|----------|
+| `country` | `country` | 必填 |
+| `category` | `category` | 必填 |
+| `config_code` | `config code`、`configcode` | 必填 |
+| `config_name` | `config name`、`configname` | **可选**（v0.5.5 新增） |
+| `data_type` | `data type`、`datatype` | 必填 |
+| `ttl` | `ttl` | 必填 |
 
 错误消息：`"Excel header missing required column '<name>'"`。
 
@@ -171,7 +175,7 @@ v0.5.3 不根据 `column_dimensions.hidden` 过滤列或 cell：
 
 | 行 | 用途 | 关键列（v0.5.3 行 1 列头匹配 + ym 段识别） |
 |----|------|------------------------------------------|
-| 1  | 列头 + `ym` 段标签 | 5 个关键列由列头文本匹配定位；col 13+ 携带稀疏 `YYYY-MM` 段标签 |
+| 1  | 列头 + `ym` 段标签 | 6 个关键列由列头文本匹配定位（含 `config_name`）；col 13+ 携带稀疏 `YYYY-MM` 段标签 |
 | 2  | 周编号 `WK01` / `WK02` / … | `_ym_segments` 识别的有效 col |
 | 3  | 周起始日 `YYYY-MM-DD` | `_ym_segments` 识别的有效 col |
 | 4..max_row | 数据行 | 通过 `_resolve_columns` 识别的 5 个关键 col；有效周列读 `quantity` |
@@ -420,7 +424,8 @@ v0.5.3 与旧版差异：旧版硬编码 `range(13, ws.max_column + 1)`，因此
 
 ## 不实现的组件（明确范围）
 
-- 不解析 / 不存储 col 1, 2, 3, 7, 8, 9 的内容（`BU` / `Version` / `Region` / `Config Name` / `Model` / `Manufacturer`），也**不解析 col 12 `Update By` 的内容**；
+- 不解析 / 不存储 col 1, 2, 3, 8, 9 的内容（`BU` / `Version` / `Region` / `Model` / `Manufacturer`），也**不解析 col 12 `Update By` 的内容**；
+- **v0.5.5 变更**：`Config Name`（col 7）从"丢弃"改为入库字段 `config_name`（可选列，缺失时入库为 None）；
 - 不实现文件落盘（上传文件不存到磁盘，仅流式读 `BytesIO` → 解析 → 入库 → 释放）；
 - 不实现导入历史回滚 / undo；
 - 不实现事实行的编辑（只能整批删除后重传）；
@@ -501,7 +506,7 @@ v0.5.3 与旧版差异：旧版硬编码 `range(13, ws.max_column + 1)`，因此
 2. **同库同 schema**：复用现有 MySQL `sparkmemo`，新表由 `Base.metadata.create_all` 自动创建；老库走幂等 `CREATE TABLE IF NOT EXISTS`；
 3. **新依赖**：`openpyxl` 加 `backend/requirements.txt`，按 AGENTS.md 在 `dev_env` 安装；
 4. **CASCADE**：删除 `dsp_uploads` 自动级联删 `dsp_upload_rows`（SQLAlchemy `cascade="all, delete-orphan"` + DB 端 `ON DELETE CASCADE`）；
-5. **v0.5.3 字段定位算法**：5 个关键列（country/category/config_code/data_type/ttl）的列号由**行 1 列头文本首匹配**决定（去前缀 `*` + 首尾空白 + 大小写不敏感）；不依赖字面列号。因此跨文件即使列位置变化也能正确解析。若 Excel 模板表头文本改名，需同步改本规格 §列头匹配规则 与代码 `_HEADER_TARGETS`。
+5. **v0.5.3 字段定位算法**：6 个关键列（country/category/config_code/config_name/data_type/ttl）的列号由**行 1 列头文本首匹配**决定（去前缀 `*` + 首尾空白 + 大小写不敏感）；不依赖字面列号。因此跨文件即使列位置变化也能正确解析。若 Excel 模板表头文本改名，需同步改本规格 §列头匹配规则 与代码 `_HEADER_TARGETS`。
 6. **`source_filename`**：含扩展名的完整原始文件名，仅展示 / 审计用，不参与业务；
 7. **`config_code` 可空**：与原 Excel 数据保持一致，不做智能补全；但**整行 Country+ConfigCode 都空**的行整体跳过（R1）；
 8. **`data_type` 严格匹配**：仅字面 `Demand` / `Supply` 入库；其它值（含 `Demand PO` 等所有变体）整行跳过（R2）；大小写敏感、首尾空白已 strip；
@@ -513,14 +518,23 @@ v0.5.3 与旧版差异：旧版硬编码 `range(13, ws.max_column + 1)`，因此
 
 ---
 
-### 行布局（v0.5.3）
+### 行布局（v0.5.5）
 
 | 行 | 用途 | 关键列 |
 |----|------|--------|
-| 1  | 列头 + `ym` 段标签 | 行 1 列头文本匹配（5 个关键列）；col 13+ 携带稀疏 `YYYY-MM` 段标签 |
+| 1  | 列头 + `ym` 段标签 | 行 1 列头文本匹配（6 个关键列，含 `config_name`）；col 13+ 携带稀疏 `YYYY-MM` 段标签 |
 | 2  | 周编号 `WK01` / `WK02` / … | `_ym_segments` 识别的有效 col |
 | 3  | 周起始日 `YYYY-MM-DD` | `_ym_segments` 识别的有效 col |
-| 4..max_row | 数据行 | `_resolve_columns` 识别的 5 个关键 col；有效周列读 `quantity` |
+| 4..max_row | 数据行 | `_resolve_columns` 识别的 6 个关键 col；有效周列读 `quantity` |
+
+### v0.5.4 → v0.5.5（Config Name 入库）
+
+| 章节 | v0.5.4 | v0.5.5 |
+|------|--------|--------|
+| §数据模型 | `dsp_upload_rows` 无 `config_name` | **新增** `config_name` 字段（可选列，缺失时入库为 None） |
+| §列布局表 | col 7 `*Config Name` 标记为"丢弃" | 改为"静态"，入库字段 `config_name` |
+| §`_HEADER_TARGETS` 字典 | 无 `config_name` | **新增** `config_name`（别名 `config name` / `configname`），可选列 |
+| §不实现的组件 | 含 "Config Name" 在丢弃列表 | 移除 Config Name，丢弃列从 6 个减为 5 个 |
 
 ### v0.5.3 → v0.5.4（模块重命名 + 子模块新增）
 
@@ -539,9 +553,9 @@ v0.5.3 与旧版差异：旧版硬编码 `range(13, ws.max_column + 1)`，因此
 |------|--------|--------|
 | §工作表结构 / §Excel 解析 | 静态列按字面列号（col 4/5/6/10/11/12）硬编码；`update_by` 作为 col 12 的周列起点边界 | **行 1 列头文本首匹配**（去 `*` / strip / 大小写不敏感）；周列起点改为行 1 扫 `YYYY-MM` 段标签；新章节 §列头匹配规则 与 §`ym` 段识别 |
 | §跳过规则 | C1-C4 | C1-C4 不变（不再引入 C5 hidden 列跳过） |
-| §错误约定 422 | Sheet 不存在 / Form 字段缺失 | **新增**：5 个关键列缺失 → `BadHeaderError` → 422 + detail `"Excel header missing required column '<name>'"` |
+| §错误约定 422 | Sheet 不存在 / Form 字段缺失 | **新增**：6 个关键列缺失 → `BadHeaderError` → 422 + detail `"Excel header missing required column '<name>'"` |
 | §Assumption 5 | "固定列号"为字段映射唯一依据 | "v0.5.3 字段定位算法"：行 1 列头文本首匹配 |
-| §行布局 | col 4..12 硬编码；col 13..max_col 周列 | 5 个关键列按列头匹配；有效周列按 `YYYY-MM` 段识别 |
+| §行布局 | col 4..12 硬编码；col 13..max_col 周列 | 6 个关键列按列头匹配；有效周列按 `YYYY-MM` 段识别 |
 | §修订记录 | "丢弃 6 列" 表述 | 加 v0.5.3 行（明确"行 1 列头文本"为新算法） |
 
 ### v0.5.1 → v0.5.2

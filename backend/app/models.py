@@ -167,6 +167,7 @@ class DspUploadRow(Base):
     country: Mapped[Optional[str]] = mapped_column(String(64))
     category: Mapped[Optional[str]] = mapped_column(String(128))
     config_code: Mapped[Optional[str]] = mapped_column(String(128))
+    config_name: Mapped[Optional[str]] = mapped_column(String(256))
     data_type: Mapped[Optional[str]] = mapped_column(String(64))
     ttl: Mapped[Optional[int]] = mapped_column(Integer)
     ym: Mapped[str] = mapped_column("ym", String(7), nullable=False)
