@@ -2,7 +2,7 @@
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, SmallInteger, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -179,3 +179,26 @@ class DspUploadRow(Base):
 
 
 # ========== DSP 上传模块结束 ==========
+
+
+# ========== 透视查询（v0.5.6）==========
+
+
+class WeekDt(Base):
+    """日期周维度维表（外部维护，本项目只读引用）。
+
+    - dt: 日期（YYYY-MM-DD）
+    - year_id / month_id / week_id: ISO 年/自然月/ISO 周编号
+    - is_week_start: 是否为周起始日（周一）
+    """
+
+    __tablename__ = "week_dt"
+
+    dt: Mapped[str] = mapped_column(String(10), primary_key=True)
+    year_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    month_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    week_id: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    is_week_start: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+# ========== 透视查询 模块结束 ==========

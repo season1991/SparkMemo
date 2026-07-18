@@ -153,7 +153,20 @@ def scan_reminders(db: Session) -> list[Notification]:
 - 禁止留下无意义占位注释（如 `# TODO`、`# xxx`）
 - 注释应简洁明了，避免冗长描述
 
-### 5.3 命名与目录约定
+### 5.3 报错信息规范
+
+API 返回给前端的错误信息必须使用中文描述，确保用户可读。
+
+| 错误来源 | 处理方式 | 示例 |
+|----------|----------|------|
+| Pydantic `field_validator` / `model_validator` | `raise ValueError("中文描述")` | `raise ValueError("months 必须在 1-12 之间")` |
+| Pydantic 内置校验（`ge` / `le` / `min_length` 等） | 在 schema 字段上设置 `description` 中文说明；或改用自定义 validator 输出中文 | — |
+| FastAPI `HTTPException` | `detail` 使用中文 | `raise HTTPException(status_code=404, detail="任务类型不存在")` |
+| 业务逻辑错误 | 返回中文 `detail` | `raise HTTPException(status_code=409, detail="该任务类型已被任务引用，无法删除")` |
+
+> Pydantic v2 默认校验错误为英文（如 `Input should be greater than or equal to 1970`）。遇到此类内置消息，应改写为自定义 validator 并输出中文，或通过 FastAPI 异常处理器统一翻译。禁止直接将 Pydantic 英文校验信息透传给前端。
+
+### 5.4 命名与目录约定
 
 - Python：模块/包名 `snake_case`、类名 `PascalCase`、函数/变量 `snake_case`
 - Vue：组件文件 `PascalCase.vue`（如 `TaskForm.vue`），stores `useXxxStore.js`

@@ -46,16 +46,17 @@ beforeEach(() => {
 })
 
 describe('WeeklyDemandHub', () => {
-  it('渲染包含 3 个子功能的页面（按文本而非组件数）', () => {
+  it('渲染包含 4 个子功能的页面（按文本而非组件数）', () => {
     const wrapper = mount(WeeklyDemandHub, { global: { stubs: true } })
     expect(wrapper.find('.hub').exists()).toBe(true)
-    // 文本里能找到三个功能标题
+    // 文本里能找到四个功能标题
     expect(wrapper.text()).toContain('DSP 上传')
     expect(wrapper.text()).toContain('查询')
     expect(wrapper.text()).toContain('删除')
+    expect(wrapper.text()).toContain('透视查询')
     // 标题 + hint 文案
     expect(wrapper.text()).toContain('周需求管理')
-    expect(wrapper.text()).toContain('3 个子功能')
+    expect(wrapper.text()).toContain('4 个子功能')
   })
 })
 

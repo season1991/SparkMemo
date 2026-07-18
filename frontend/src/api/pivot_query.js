@@ -1,0 +1,116 @@
+/**
+ * 透视查询 API（v0.5.6）：对接后端 /api/pivot-query 路由。
+ *
+ * 调用 `POST /api/pivot-query`，请求体为 `PivotQueryRequest`，
+ * 响应为 `PivotQueryResponse`（含 period_columns / row_groups / total_rows / version_dates / date_granularity）。
+ *
+ * 入参约定（与 backend/app/schemas.py PivotQueryRequest 严格对齐）：
+ * - pivot_type: 'demand' | 'demand_plus_supply'（v0.5.6 固定 'demand'）
+ * - vendor / item / sub_item: 必填，字符串
+ * - version_dates: 必填，1-20 个 YYYY-MM-DD
+ * - countries / categories / config_codes / config_names: 可选，严格级联
+ * - years / months / weeks: 可选，至少传一个；级联
+ * - expand_to_daily: bool（默认 false 按周，true 按日）
+ *
+ * 错误处理：抛 ApiError（client.js 拦截器）。
+ */
+
+import client from './client.js'
+
+/**
+ * 执行透视查询。
+ *
+ * @param {object} req PivotQueryRequest
+ * @returns {Promise<{
+ *   period_columns: string[],
+ *   row_groups: Array<{
+ *     country: string|null, category: string|null, config_code: string|null,
+ *     config_name: string|null, data_type: string|null, ttl: number|null,
+ *     version_date: string, quantities: Record<string, number>
+ *   }>,
+ *   total_rows: number,
+ *   version_dates: string[],
+ *   date_granularity: 'week' | 'day'
+ * }>}
+ */
+export function queryPivot(req) {
+  return client.post('/pivot-query', req)
+}
+
+
+// ==================== 透视查询辅助 lookup ====================
+//
+// 这些端点供前端下拉选项使用：
+// - countries / categories / config_names：业务行级联数据源（从 dsp_upload_rows 去重）
+// - weeks-of-month：根据 ISO 年 + 自然月返回周编号 + 周起始日
+
+
+/**
+ * 返回指定 (vendor+item+sub_item+version_dates) 下所有去重 country。
+ *
+ * @param {{ vendor: string, item: string, sub_item: string, version_dates: string[] }} base
+ * @returns {Promise<string[]>}
+ */
+export function lookupCountries(base) {
+  return client.get('/pivot-query/lookups/countries', {
+    params: {
+      vendor: base.vendor,
+      item: base.item,
+      sub_item: base.sub_item,
+      version_dates: (base.version_dates || []).join(','),
+    },
+  })
+}
+
+/**
+ * 返回指定条件下（已选 countries 时再过滤）去重 category。
+ *
+ * @param {{ vendor: string, item: string, sub_item: string,
+ *           version_dates: string[], countries: string[] }} base
+ * @returns {Promise<string[]>}
+ */
+export function lookupCategories(base) {
+  return client.get('/pivot-query/lookups/categories', {
+    params: {
+      vendor: base.vendor,
+      item: base.item,
+      sub_item: base.sub_item,
+      version_dates: (base.version_dates || []).join(','),
+      countries: (base.countries || []).join(','),
+    },
+  })
+}
+
+/**
+ * 返回指定条件下（已选 countries + categories 时再过滤）去重 config_name。
+ *
+ * @param {{ vendor: string, item: string, sub_item: string,
+ *           version_dates: string[], countries: string[],
+ *           categories: string[] }} base
+ * @returns {Promise<string[]>}
+ */
+export function lookupConfigNames(base) {
+  return client.get('/pivot-query/lookups/config-names', {
+    params: {
+      vendor: base.vendor,
+      item: base.item,
+      sub_item: base.sub_item,
+      version_dates: (base.version_dates || []).join(','),
+      countries: (base.countries || []).join(','),
+      categories: (base.categories || []).join(','),
+    },
+  })
+}
+
+/**
+ * 返回指定 ISO 年 + 自然月的所有 (week_id, week_start_date)。
+ *
+ * @param {number} year ISO 年
+ * @param {number} month 自然月 1-12
+ * @returns {Promise<Array<{ week_id: number, week_start_date: string }>>}
+ */
+export function lookupWeeksOfMonth(year, month) {
+  return client.get('/pivot-query/lookups/weeks-of-month', {
+    params: { year, month },
+  })
+}

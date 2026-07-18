@@ -93,16 +93,21 @@ _database.SessionLocal = SessionLocal
 
 @pytest.fixture
 def db():
-    """每个用例前清空四表（依赖顺序），返回新的 Session。"""
+    """每个用例前清空表（依赖顺序），返回新的 Session。"""
     session = SessionLocal()
     # SQLite 与 MySQL 关闭外键的语法不同；Dialect 分支处理
     if engine.dialect.name == "sqlite":
-        # 顺序按子表优先
+        # 顺序按子表优先；week_dt 由测试 fixture 动态创建，可能存在也可能不存在
         for table_name in ("dsp_upload_rows", "dsp_uploads", "tasks", "projects", "task_types", "companies", "email_config"):
             session.execute(text(f"DELETE FROM {table_name}"))
+        # week_dt 可能不存在（仅 pivot_query 测试会 CREATE），忽略错误
+        try:
+            session.execute(text("DELETE FROM week_dt"))
+        except Exception:
+            session.rollback()
     else:
         session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
-        for table_name in ("dsp_upload_rows", "dsp_uploads", "tasks", "projects", "task_types", "companies", "email_config"):
+        for table_name in ("dsp_upload_rows", "dsp_uploads", "tasks", "projects", "task_types", "companies", "email_config", "week_dt"):
             session.execute(text(f"DELETE FROM {table_name}"))
         session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     session.commit()

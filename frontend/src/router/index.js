@@ -13,6 +13,7 @@ import WeeklyDemandHub from '../views/WeeklyDemandHub.vue'
 import DspUpload from '../views/DspUpload.vue'
 import WeeklyDemandQuery from '../views/WeeklyDemandQuery.vue'
 import WeeklyDemandDelete from '../views/WeeklyDemandDelete.vue'
+import PivotQuery from '../views/PivotQuery.vue'
 
 const routes = [
   {
@@ -57,6 +58,12 @@ const routes = [
     name: 'WeeklyDemandDelete',
     component: WeeklyDemandDelete,
     meta: { title: '删除' }
+  },
+  {
+    path: '/pivot-query',
+    name: 'PivotQuery',
+    component: PivotQuery,
+    meta: { title: '透视查询' }
   },
   {
     path: '/email-config',

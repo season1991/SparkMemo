@@ -1,4 +1,4 @@
-# 周需求管理模块规格（v0.5.4 — 替代原「DSP 上传」）
+# 周需求管理模块规格（v0.5.6 — 新增「透视查询」子模块）
 
 > 适配规格：SparkMemo v0.5.4
 > 适用范围：单用户本地版，无登录。
@@ -10,6 +10,14 @@
 > 3. 前端路由层级：`/dsp-uploads` 作为 hub 页（含 3 张功能卡片），子路由 `/dsp-uploads/upload`、`/dsp-uploads/query`、`/dsp-uploads/delete` 分别落地三个子功能页。
 > 4. 后端 API：`GET /api/dsp-uploads` 增加可选 query 参数 `vendor / item / sub_item / version_date`，前端用它做精确查找；删除仍走既有的 `DELETE /api/dsp-uploads/{id}`（前端先查再删）。
 > 5. 字段名规范化沿用 v0.5.3（`ym` / `vendor / item / sub_item / version_date`）；保留 v0.5.3 的列头文本匹配 + 跳过隐藏列说明。
+>
+> **v0.5.6 新增「透视查询」子模块**（独立模块，不挂在 `/api/dsp-uploads` 下）：
+> 1. 新增独立 API 端点 `POST /api/pivot-query`，对应 `app/api/pivot_query.py`。
+> 2. 新增 CRUD 模块 `app/crud/pivot_query.py`，实现三子查询 CTE 共享 + 笛卡尔积预检。
+> 3. 新增 ORM 模型 `WeekDt`（只读引用外部维表 `sparkmemo.week_dt`，不通过 `create_all` 创建）。
+> 4. 横向 = 业务行（country/category/config_code/config_name/data_type/version_date/ttl），纵向 = week_dt（year/month/week/dt），交叉点 = quantity（COALESCE 兜底 0）。
+> 5. v0.5.6 固定 `data_type='Demand'`；`pivot_type='demand_plus_supply'` 占位待后续实现。
+> 6. 严格级联校验：业务行 `config_names → categories → countries`；时间 `weeks → (months AND years) → years`；必须至少传一个时间维度。
 
 v0.5.4 起拆分为三个互相关联的子功能，对应同一个数据模型 `dsp_uploads` / `dsp_upload_rows`：
 
@@ -588,3 +596,186 @@ v0.5.3 与旧版差异：旧版硬编码 `range(13, ws.max_column + 1)`，因此
 | §不实现的组件 | "BU/Version/Region/Config Name/Model/Manufacturer/Update By 7 列"包含 Update By | 改为 6 列，明确 Update By 是边界标记，不入丢弃也不入存储 |
 | Test Plan §2 | "整行 Country+ConfigCode 都空"行为未明确测 | 拆 R1/R2/C1/C2/C3/C4 6 个独立断言 |
 | Test Plan §3 | `data_type = GR` 入库断言 | 改为"事实行 data_type ∈ {Demand, Supply}" |
+
+---
+
+## 透视查询子模块（v0.5.6 新增）
+
+> **定位**：独立模块 `POST /api/pivot-query`，不挂在 `/api/dsp-uploads` 下；与 DSP 上传/查询/删除子功能平级，但**纯只读**，不修改任何数据。
+
+### 1. 业务目标
+
+让用户在前端（未来）通过 `vendor + item + sub_item + 多个 version_date` 定位批次，结合 `country / category / config_name` 等业务行筛选和 `year / month / week` 时间筛选，**对一张已存在的批次矩阵做 OLAP 风格的横向 × 纵向透视**，交叉点显示 `quantity`（缺失默认 0）。
+
+### 2. 数据模型
+
+| 表 | 关系 | 用途 |
+|----|------|------|
+| `dsp_uploads` | 主表 | 批次维度（vendor+item+sub_item+version_date） |
+| `dsp_upload_rows` | 主表 | 横向业务行（country/category/config_code/config_name/data_type/ttl）+ 交叉点 quantity |
+| `week_dt` | 外部维表 | 纵向日期维度（year_id/month_id/week_id/dt），`is_week_start=1` 标识周起始日 |
+
+`week_dt` 表结构（外部维护，本项目**只读引用**，不通过 `create_all` 创建）：
+
+```sql
+CREATE TABLE `week_dt` (
+  `dt` date NOT NULL,
+  `year_id` smallint NOT NULL,
+  `month_id` tinyint NOT NULL,
+  `week_id` tinyint NOT NULL,
+  `is_week_start` tinyint(1) NOT NULL DEFAULT '0',
+  PRIMARY KEY (`dt`),
+  KEY `idx_year_week` (`year_id`,`week_id`),
+  KEY `idx_year_month` (`year_id`,`month_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='日期周维度维表';
+```
+
+### 3. 核心 SQL 结构（CTE 共享）
+
+```sql
+WITH base_rows AS (
+    -- 一次扫描 dsp_upload_rows，b 与 d 共享
+    SELECT id, upload_id, country, category, config_code, config_name,
+           data_type, ttl, date, quantity
+    FROM dsp_upload_rows
+    JOIN dsp_uploads ON dsp_upload_rows.upload_id = dsp_uploads.id
+    WHERE vendor=? AND item=? AND sub_item=? AND version_date IN (?)
+      AND data_type = 'Demand'                              -- v0.5.6 固定
+      AND [country/category/config_code/config_name 筛选]
+)
+SELECT
+    b.country, b.category, b.config_code, b.config_name,
+    b.data_type, b.ttl,
+    a.version_date,
+    c.dt AS period_date,
+    COALESCE(d.quantity, 0) AS quantity
+FROM (subquery_a) a                                          -- a: dsp_uploads
+JOIN (SELECT DISTINCT country, category, ... FROM base_rows) b
+    ON b.upload_id = a.upload_id                             -- 横向业务行
+CROSS JOIN (subquery_c) c                                    -- 纵向：week_dt
+LEFT JOIN (subquery_d) d                                     -- 交叉点 quantity
+    ON d.upload_id = a.id AND d.id = b.row_id AND d.date = c.dt
+ORDER BY c.dt
+```
+
+### 4. 入参 `PivotQueryRequest`
+
+| 字段 | 类型 | 必填 | 校验 |
+|------|------|------|------|
+| `pivot_type` | `'demand' \| 'demand_plus_supply'` | 是 | v0.5.6 固定 `'demand'`；`'demand_plus_supply'` 占位 |
+| `vendor` | string (1-64) | 是 | — |
+| `item` | string (1-128) | 是 | — |
+| `sub_item` | string (1-128) | 是 | — |
+| `version_dates` | list[string] (1-20) | 是 | 每项 `YYYY-MM-DD` |
+| `countries` | list[string] | 否 | — |
+| `categories` | list[string] | 否 | **级联**：传 `config_names` 时必填 |
+| `config_codes` | list[string] | 否 | — |
+| `config_names` | list[string] | 否 | **级联**：传时必填 `categories` → 必填 `countries` |
+| `years` | list[int] | 否（必传其一） | **级联**：传 `months` 时必填；传 `weeks` 时必填 |
+| `months` | list[int] (1-12) | 否 | **级联**：传 `weeks` 时必填 |
+| `weeks` | list[int] (1-53) | 否 | **级联**：传时必填 `years` AND `months` |
+| `expand_to_daily` | bool (default false) | 否 | true 时去掉 `is_week_start=1` 过滤，按每天展开 |
+
+### 5. 出参 `PivotQueryResponse`
+
+```json
+{
+  "period_columns": ["2026-07-06", "2026-07-13", "2026-07-20"],
+  "row_groups": [
+    {
+      "country": "爱尔兰",
+      "category": "交换机整机",
+      "config_code": "X123",
+      "config_name": "32Q-TOR-T3",
+      "data_type": "Demand",
+      "ttl": 4,
+      "version_date": "2026-06-29",
+      "quantities": {
+        "2026-07-06": 100,
+        "2026-07-13": 0,
+        "2026-07-20": 50
+      }
+    }
+  ],
+  "total_rows": 1,
+  "version_dates": ["2026-06-29"],
+  "date_granularity": "week"
+}
+```
+
+### 6. 数据量保护
+
+| 保护项 | 触发 | 行为 |
+|--------|------|------|
+| **笛卡尔积预检** | `\|b\| × \|c\| > 50000` | 422 + detail `"cartesian product estimated N rows exceeds limit 50000; please narrow business row filters or date range"` |
+| **必须传时间维度** | `years/months/weeks` 都未传 | Pydantic 422 |
+| **级联校验** | 违反任一级联规则 | Pydantic 422 |
+| **`week_dt` 表不存在** | 首次访问 | 500（运维责任：本项目不创建该表） |
+
+### 7. 错误约定
+
+| HTTP | 场景 |
+|------|------|
+| 422 | Pydantic 级联校验失败 / 笛卡尔积预检超出 |
+| 500 | SQLAlchemy 异常（如 `week_dt` 表不存在 / DB 不可达） |
+
+### 8. 不实现的组件（明确范围）
+
+- **`pivot_type='demand_plus_supply'` 的具体行为**：v0.5.6 暂不实现，Schema 接受该值但行为等同 `'demand'`。
+- **透视结果缓存**：首次实现不引入。
+- **按行/列细粒度排序**：默认 `ORDER BY c.dt`（period_date 升序），不支持自定义排序。
+- **前端**：本轮纯后端，前端 UI 由后续任务实现。
+- **`week_dt` 表创建**：外部依赖，由调用方保证表存在。
+- **跨版本 quantity 合并**：每个 `version_date` 独立成行（`row_groups` 中是分开的对象），不合并求和。
+- **透视结果分页**：单次响应无分页，硬上限通过笛卡尔积预检保证。
+- **多表 JOIN 优化**：v0.5.6 使用 CTE 共享 dsp_upload_rows 一次扫描；不引入物化视图。
+
+### 9. Test Plan（新增）
+
+测试位于 `backend/tests/test_pivot_query.py`：
+
+1. **级联校验失败**：
+   - 传 `config_names` 不传 `categories` → 422
+   - 传 `categories` 不传 `countries` → 422
+   - 传 `weeks` 不传 `years` / `months` → 422
+   - 传 `months` 不传 `years` → 422
+   - 时间维度一个都不传 → 422
+   - `version_dates` 含非法日期格式 → 422
+   - `months` 含 13 / `weeks` 含 54 → 422
+2. **`estimate_size` 正确性**：
+   - 无业务行 → 估算 = 0
+   - `|b|` 和 `|c|` 分别为 2 / 3 → 估算 = 6
+   - 传 `countries=['爱尔兰']` 过滤 → 估算只数 `country='爱尔兰'` 行
+3. **`MAX_CARTESIAN` 超限**（monkeypatch 调低阈值）→ API 422
+4. **正常路径**：
+   - 单版本 + 单业务行 + 多周起始日 → COALESCE 兜底为 0
+   - `expand_to_daily=True` → 7 列（周一至周日），只有当天有数据
+   - 多版本 → 每个版本独立 row_group
+   - `Supply` 行被 `data_type='Demand'` 过滤
+   - 空数据（version_date 不存在）→ 空 `row_groups`
+   - `countries` 过滤生效
+5. **API 端到端**：POST `/api/pivot-query` 正常返回 / 级联校验失败 / 笛卡尔积超限
+
+### 10. Assumptions
+
+1. **`week_dt` 表由外部系统维护**，本项目不创建、不修改、不删除。
+2. **MySQL `tinyint(1)` ↔ SQLAlchemy `Boolean`** 映射兼容；SQLite 测试用 0/1 模拟。
+3. **不引入新的依赖**：透视查询全部走 SQLAlchemy + Python 标准库；不需要 `pandas`。
+4. **`MAX_CARTESIAN=50000`** 是经验值，预留空间给后续 GROUP BY / 排序优化；如有需要可调。
+5. **`config_code` 同样可作筛选字段**：虽不在前端 UI 必选字段内，但 SQL 层支持精确匹配。
+6. **CTE 在 SQLite/MySQL 上语法兼容**：本项目所有 SQL 文本不出现 `CURDATE()` / `NOW()` 等数据库内置日期函数。
+7. **单用户本地版**维持不变：不引入登录、不引入多租户。
+
+---
+
+### v0.5.5 → v0.5.6（新增透视查询子模块）
+
+| 章节 | v0.5.5 | v0.5.6 |
+|------|--------|--------|
+| §Summary | 仅周需求管理三子功能（上传/查询/删除） | **新增**：第四子功能「透视查询」（独立模块） |
+| §Key Changes / 模型 | `dsp_uploads` + `dsp_upload_rows` + `config_name` | **新增 `WeekDt` ORM 模型**（只读引用外部表） |
+| §API 总览 | 5 个 DSP 上传端点 | **追加 1 个独立端点**：`POST /api/pivot-query` |
+| §新章节「透视查询子模块」 | 不存在 | **新增整章**：含 SQL 结构 / 入参出参 / 数据量保护 / 错误约定 / Test Plan / Assumptions |
+| §不实现的组件 | 11 项 | **追加 8 项**（pivot_type='demand_plus_supply' 待定、不引入前端、不创建 week_dt 表等） |
+| 后端代码 | `crud/dsp_upload.py` + `api/dsp_uploads.py` | **新增 `crud/pivot_query.py` + `api/pivot_query.py`** |
+| 测试 | `test_dsp_upload.py` | **新增 `test_pivot_query.py`** |

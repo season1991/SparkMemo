@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 import re
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _validate_yyyy_mm_dd(value: Optional[str], field_name: str) -> Optional[str]:
@@ -440,3 +440,150 @@ class DspUploadRowListResponse(BaseModel):
 
 
 # ========== DSP 上传 模块结束 ==========
+
+
+# ========== 透视查询（v0.5.6）模式 ==========
+
+
+# 透视类型：当前版本固定支持 'demand'（v0.5.6 需求）；'demand_plus_supply' 占位待后续实现
+PivotType = Literal["demand", "demand_plus_supply"]
+
+
+class PivotQueryRequest(BaseModel):
+    """透视查询请求体。
+
+    入参分四组：
+    1. 必填定位：`pivot_type` / `vendor` / `item` / `sub_item` / `version_dates`（≥1）
+    2. 横向业务行筛选（可选）：`countries` / `categories` / `config_codes` / `config_names`
+       - **严格级联**：`config_names` 提供 → 必须提供 `categories` → 必须提供 `countries`
+    3. 纵向日期筛选（可选）：`years` / `months` / `weeks`
+       - **级联**：`weeks` 提供 → 必须同时提供 `months` 与 `years`
+       - **级联**：`months` 提供 → 必须提供 `years`
+       - **至少一个**：必须提供 `years` / `months` / `weeks` 其一
+    4. 展示控制：`expand_to_daily`（默认 False = 按周；True = 按日）
+
+    `pivot_type='demand'` 时固定注入 `data_type='Demand'` 过滤（v0.5.6 简化）；
+    `pivot_type='demand_plus_supply'` 暂不实现具体行为（占位）。
+    """
+
+    pivot_type: PivotType = "demand"
+    vendor: str = Field(min_length=1, max_length=64)
+    item: str = Field(min_length=1, max_length=128)
+    sub_item: str = Field(min_length=1, max_length=128)
+    version_dates: list[str] = Field(min_length=1, max_length=20)
+
+    countries: Optional[list[str]] = None
+    categories: Optional[list[str]] = None
+    config_codes: Optional[list[str]] = None
+    config_names: Optional[list[str]] = None
+
+    years: Optional[list[int]] = None
+    months: Optional[list[int]] = None
+    weeks: Optional[list[int]] = None
+    expand_to_daily: bool = False
+
+    @field_validator("version_dates")
+    @classmethod
+    def _check_version_dates(cls, value: list[str]) -> list[str]:
+        for i, vd in enumerate(value):
+            try:
+                _validate_yyyy_mm_dd(vd, f"version_dates[{i}]")
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+        return value
+
+    @field_validator("months")
+    @classmethod
+    def _check_months(cls, value: Optional[list[int]]) -> Optional[list[int]]:
+        if value is not None:
+            for m in value:
+                if not (1 <= m <= 12):
+                    raise ValueError(f"months must be in 1-12, got {m}")
+        return value
+
+    @field_validator("weeks")
+    @classmethod
+    def _check_weeks(cls, value: Optional[list[int]]) -> Optional[list[int]]:
+        if value is not None:
+            for w in value:
+                if not (1 <= w <= 53):
+                    raise ValueError(f"weeks must be in 1-53, got {w}")
+        return value
+
+    @model_validator(mode="after")
+    def _check_cascade(self):
+        # 业务行级联：config_names → categories → countries
+        if self.config_names and not self.categories:
+            raise ValueError(
+                "categories is required when config_names is provided"
+            )
+        if self.categories and not self.countries:
+            raise ValueError(
+                "countries is required when categories is provided"
+            )
+
+        # 时间维度级联：weeks → (months AND years) → years
+        if self.weeks:
+            if not (self.years and self.months):
+                raise ValueError(
+                    "years and months are required when weeks is provided"
+                )
+        if self.months and not self.years:
+            raise ValueError("years is required when months is provided")
+
+        # 时间维度至少一个
+        if not (self.years or self.months or self.weeks):
+            raise ValueError(
+                "at least one of years / months / weeks must be provided"
+            )
+
+        return self
+
+
+class PivotRow(BaseModel):
+    """透视表的一行（横向）：业务维度组合 + 多个版本日期的 quantity 列。
+
+    `quantities` 字典的 key 是 `period_date`（按周为周起始日，按日为每天），
+    value 是 quantity（缺失时由后端 COALESCE 为 0）。
+    """
+
+    country: Optional[str] = None
+    category: Optional[str] = None
+    config_code: Optional[str] = None
+    config_name: Optional[str] = None
+    data_type: Optional[str] = None
+    ttl: Optional[int] = None
+    version_date: str
+    quantities: dict[str, int]
+
+
+class PivotQueryResponse(BaseModel):
+    """透视查询响应。
+
+    - `period_columns`：纵向展开成列头的日期列表（升序），前端用作表头
+    - `row_groups`：横向分组的行列表，每行包含业务维度 + 各 period 的 quantity
+    - `date_granularity`：标识返回的 period 是按周（"week"）还是按日（"day"）
+    """
+
+    period_columns: list[str]
+    row_groups: list[PivotRow]
+    total_rows: int
+    version_dates: list[str]
+    date_granularity: Literal["week", "day"]
+
+
+class WeekInfo(BaseModel):
+    """透视查询辅助：单条「ISO 周编号 + 周起始日（周一）」映射。
+
+    - `week_id`：ISO 周编号（1-53）
+    - `week_start_date`：该周周一的日期（YYYY-MM-DD）
+
+    注：ISO 周历下，周一为一周的第一天；week_id 归属的「ISO 年」与 `week_start_date`
+    的自然年可能不同（如 2025-W01 起始于 2024-12-30）。
+    """
+
+    week_id: int
+    week_start_date: str
+
+
+# ========== 透视查询 模块结束 ==========

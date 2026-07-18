@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "SparkMemo",
-    "version": "0.5.1",
-    "description": "SparkMemo v0.5 → v0.5.1: DSP upload POST API now requires 4 form fields (vendor/item/sub_item/version_date)."
+    "title": "SparkMemo — Weekly Demand Management",
+    "version": "0.5.6",
+    "description": "周需求管理模块 OpenAPI（v0.5.6）。\n\nv0.5.1: DSP upload POST requires 4 form fields.\nv0.5.4: module rename → 周需求管理; GET /api/dsp-uploads gains 4 optional filter params; cascade dropdown endpoints added.\nv0.5.5: DspUploadRowRead adds config_name field.\nv0.5.6: see pivot_query.json for /api/pivot-query endpoints."
   },
   "paths": {
     "/api/companies": {
@@ -1243,6 +1243,58 @@
               "default": 20,
               "title": "Size"
             }
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": false,
+            "description": "可选过滤：精确匹配 vendor（大小写敏感）",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Vendor"
+            }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "required": false,
+            "description": "可选过滤：精确匹配 item",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Item"
+            }
+          },
+          {
+            "name": "sub_item",
+            "in": "query",
+            "required": false,
+            "description": "可选过滤：精确匹配 sub_item",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Sub Item"
+            }
+          },
+          {
+            "name": "version_date",
+            "in": "query",
+            "required": false,
+            "description": "可选过滤：精确匹配 version_date（YYYY-MM-DD）",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Version Date"
+            }
           }
         ],
         "responses": {
@@ -1303,6 +1355,169 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dsp-uploads/vendors": {
+      "get": {
+        "tags": [
+          "dsp-uploads"
+        ],
+        "summary": "Get Vendors Endpoint",
+        "description": "返回所有去重的 vendor 值（按字母升序），供查询/删除/透视查询页下拉使用。",
+        "operationId": "get_vendors_endpoint_api_dsp_uplods_vendors_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Vendors"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dsp-uploads/items": {
+      "get": {
+        "tags": [
+          "dsp-uploads"
+        ],
+        "summary": "Get Items Endpoint",
+        "description": "返回指定 vendor 下所有去重的 item 值（按字母升序）。",
+        "operationId": "get_items_endpoint_api_dsp_uplods_items_get",
+        "parameters": [
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": true,
+            "description": "供应商（必填，精确匹配）",
+            "schema": { "type": "string", "title": "Vendor" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Items"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dsp-uploads/sub-items": {
+      "get": {
+        "tags": [
+          "dsp-uploads"
+        ],
+        "summary": "Get Sub Items Endpoint",
+        "description": "返回指定 vendor + item 下所有去重的 sub_item 值（按字母升序）。",
+        "operationId": "get_sub_items_endpoint_api_dsp_uplods_sub_items_get",
+        "parameters": [
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Vendor" }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Item" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Sub Items"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dsp-uploads/version-dates": {
+      "get": {
+        "tags": [
+          "dsp-uploads"
+        ],
+        "summary": "Get Version Dates Endpoint",
+        "description": "返回指定 vendor + item + sub_item 下所有去重的 version_date 值（按日期降序）。",
+        "operationId": "get_version_dates_endpoint_api_dsp_uplods_version_dates_get",
+        "parameters": [
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Vendor" }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Item" }
+          },
+          {
+            "name": "sub_item",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Sub Item" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Version Dates"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
               }
             }
           }
@@ -1846,6 +2061,17 @@
               }
             ],
             "title": "Config Code"
+          },
+          "config_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Name"
           },
           "data_type": {
             "anyOf": [

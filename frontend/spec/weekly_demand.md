@@ -1,14 +1,25 @@
-# 周需求管理模块规格（前端，v0.5.4 — 替代原「DSP 上传」）
+# 周需求管理模块规格（前端，v0.5.6 — 新增「透视查询」子模块）
 
-> 适配 OpenAPI：[../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.4`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead` / `DspUploadListResponse`）
-> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.4）
-> 前端实现版本：v0.5.4（v0.5.3 列头匹配稳定；本轮新增 hub 页 + 查询 + 删除子模块）
+> 适配 OpenAPI：
+> - [../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.6`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead` / `DspUploadListResponse`）
+> - [../../backend/openapi/pivot_query.json](../../backend/openapi/pivot_query.json)（`info.version = 0.5.6`，路径 `/api/pivot-query`；schema `PivotQueryRequest` / `PivotQueryResponse` / `PivotRow` / `WeekInfo`）
+> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.6）
+> 前端实现版本：v0.5.6（v0.5.5 config_name 入库稳定；本轮新增透视查询子模块）
 > 页面入口：
-> - Hub：`views/WeeklyDemandHub.vue`（路由 `/dsp-uploads`）
+> - Hub：`views/WeeklyDemandHub.vue`（路由 `/dsp-uploads`；v0.5.6 起含 4 张功能卡片）
 > - 上传：`views/DspUpload.vue`（路由 `/dsp-uploads/upload`）
 > - 查询：`views/WeeklyDemandQuery.vue`（路由 `/dsp-uploads/query`）
 > - 删除：`views/WeeklyDemandDelete.vue`（路由 `/dsp-uploads/delete`）
+> - **透视查询**：`views/PivotQuery.vue`（路由 `/pivot-query`，v0.5.6 新增）
 > 全局规则遵循 [./README.md](./README.md)；本文档只描述本模块特有的页面拆解、功能点交互与测试案例。
+
+> **v0.5.6 前端侧变更**（摘要）：
+>
+> 1. **新增透视查询子模块**：独立路由 `/pivot-query`，对应 `views/PivotQuery.vue`。
+> 2. **Hub 页扩展**：`WeeklyDemandHub.vue` 从 3 张卡片扩展为 4 张（新增「透视查询」卡片，icon `DataLine`，跳 `/pivot-query`）。
+> 3. **API 层新增**：`api/pivot_query.js`（`queryPivot` + 4 个 lookup 函数）。
+> 4. **透视查询页面**：三组筛选（必填定位 + 业务行级联 + 时间维度）+ 一张 OLAP 风格透视表。
+> 5. 其余 v0.5.5 行为保持不变。
 
 > **v0.5.5 前端侧变更**（摘要）：
 >
@@ -18,7 +29,7 @@
 > **v0.5.4 前端侧变更**（摘要）：
 >
 > 1. **模块重命名**：`DSP 上传` → `周需求管理`；侧边栏第 3 项改名 + icon 维持 `Upload`。
-> 2. **路由层级**：`/dsp-uploads` 变成 hub 页（3 张卡片跳转），子路由 `/dsp-uploads/{upload,query,delete}`。
+> 2. **路由层级**：`/dsp-uploads` 变成 hub 页（3 张卡片导航），子路由 `/dsp-uploads/{upload,query,delete}`。
 > 3. **查询**：新增 `WeeklyDemandQuery.vue`；4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览。
 > 4. **删除**：新增 `WeeklyDemandDelete.vue`；4 字段 form + 查询预览按钮 + 删除按钮（带 `ElMessageBox.confirm` 二次确认）。
 > 5. API 层扩展：`api/dsp_uploads.js` 加 `findBatchByVersion(meta)` 帮助函数；走既有 `GET /api/dsp-uploads?vendor=&item=&sub_item=&version_date=`（v0.5.4 新增的 4 个可选 query 参数）。
@@ -27,16 +38,15 @@
 
 ## 1. 整体页面结构拆解
 
-### 1.1 路由与视图（v0.5.4）
+### 1.1 路由与视图（v0.5.6）
 
 | 路径 | 视图 | 侧边栏激活项 | `meta.title` | 说明 |
 |------|------|------------|--------------|------|
-| `/dsp-uploads` | `views/WeeklyDemandHub.vue` | 周需求管理 | 周需求管理 | Hub 页：3 张功能卡片导航到子页面 |
+| `/dsp-uploads` | `views/WeeklyDemandHub.vue` | 周需求管理 | 周需求管理 | Hub 页：4 张功能卡片导航到子页面（v0.5.6 新增透视查询卡片） |
 | `/dsp-uploads/upload` | `views/DspUpload.vue` | 周需求管理 | DSP 上传 | 上传文件（v0.5.3 行为沿用） |
 | `/dsp-uploads/query` | `views/WeeklyDemandQuery.vue` | 周需求管理 | 查询 | 按 4 字段精确查找已存在批次 + 事实行预览 |
 | `/dsp-uploads/delete` | `views/WeeklyDemandDelete.vue` | 周需求管理 | 删除 | 按 4 字段定位 → 预览 → 确认删除 |
-|------|------|------------|--------------|------|
-| `/dsp-uploads` | `views/DspUpload.vue` | DSP 上传 | DSP 上传 | 单页向导：选文件 → 自动解析 + 编辑 4 字段 → 载入 → 下方结果卡预览前 50 条 |
+| `/pivot-query` | `views/PivotQuery.vue` | 周需求管理 | 透视查询 | **v0.5.6 新增**：OLAP 透视查询，横向业务行 × 纵向日期 × 交叉点 quantity |
 
 ### 1.2 侧边栏（v0.5.1 在「任务管理」与「邮箱配置」之间插入「DSP 上传」）
 
@@ -128,10 +138,12 @@
 | View | `views/DspUpload.vue` | DSP 上传子功能（v0.5.3 行为沿用；路由迁到 `/dsp-uploads/upload`） |
 | View | `views/WeeklyDemandQuery.vue` | **v0.5.4 新增** 查询子功能：4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览 |
 | View | `views/WeeklyDemandDelete.vue` | **v0.5.4 新增** 删除子功能：4 字段 form + 「查询预览」按钮 + 「删除」按钮（带 `ElMessageBox.confirm`） |
+| View | `views/PivotQuery.vue` | **v0.5.6 新增** 透视查询：三组筛选（必填定位 + 业务行级联 + 时间维度）+ OLAP 透视表 |
 | Store（共享） | `stores/useDspUploadStore.js` | state（selectedFile / form / initialParsed / uploading / uploadResult / rows / rowsTotal / rowsPage / rowsSize / error）+ actions（**v0.5.2** `selectFile / updateMeta / submitUpload / loadResultRows / reset / replaceAndUpload` + **v0.5.4** `queryBatch / deleteBatch`）+ getters（hasFile / hasResult / hasEditedMeta / canSubmit） |
 | Store（新增 query-only） | `stores/useDspQueryStore.js` | **v0.5.4 新增** 仅管查询：state（form / queriedBatch / queryRows / querying / error）+ action `runQuery(form)` |
 | Store（新增 delete-only） | `stores/useDspDeleteStore.js` | **v0.5.4 新增** 仅管删除：state（form / preview / deleting / error）+ actions `loadPreview(form)` / `confirmDelete(preview)` |
 | API | `api/dsp_uploads.js` | v0.5.3：`uploadDspFile / listDspUploads / getDspUpload / listDspUploadRows / deleteDspUpload` <br> **v0.5.4 新增**：`findBatchByVersion(meta)` —— 内部走 `listDspUploads({...meta, page:1, size:1})` |
+| API | `api/pivot_query.js` | **v0.5.6 新增**：`queryPivot(req)` + `lookupCountries / lookupCategories / lookupConfigNames / lookupWeeksOfMonth` |
 | Util | `utils/dspFilename.js` | 纯函数 `parseFilename(filename)` —— 与后端 `services/dsp_parser.py:parse_filename` 规则一致 |
 
 ### 1.5 新增前端工具链
@@ -326,6 +338,75 @@
 
 > 注：`useDspUploadStore`（既有）保留 upload 子功能的全部状态；查询和删除页面各自内部管理级联下拉状态（无独立 store），通过 API 直接调用。每个页面独立、页面销毁时不相互影响。
 
+### 2.11 功能点：透视查询（v0.5.6 新增）
+
+#### 入口
+- 路由 `/pivot-query` 或从 Hub 第 4 张卡片「透视查询」进入（icon `DataLine`）。
+
+#### 页面结构
+
+页面分两部分：**筛选区**（`el-card`）+ **结果区**（`el-card`，查询后显示）。
+
+筛选区共 4 行：
+1. **必填定位行**：vendor → item → sub_item 三级级联下拉（复用 `dsp_uploads.js` 的 `getDistinctVendors / getDistinctItems / getDistinctSubItems`）；选中后联动加载后续下拉。
+2. **版本日期 + 透视类型 + 日期粒度行**：version_dates 多选（复用 `getDistinctVersionDates`）；pivot_type 单选（v0.5.6 固定 `demand`，`demand_plus_supply` disabled）；日期粒度单选（按周 / 按日）。
+3. **业务行筛选行**（`el-collapse` 折叠，可选）：countries → categories → config_names 三级级联多选（调 `lookupCountries / lookupCategories / lookupConfigNames`）。
+4. **时间维度行**：years（`el-date-picker type="year"` 单选，返回字符串如 `"2026"`，`form.years` 类型为 `string`，默认值为系统当前年份 `String(new Date().getFullYear())`）→ months（1-12 下拉多选）→ weeks（联动 years+months，调 `lookupWeeksOfMonth`）；至少选一个时间维度。
+
+#### 交互逻辑
+
+| 阶段 | 内容 |
+|------|------|
+| 页面加载 | `onMounted` → 调 `getDistinctVendors()` 填充供应商下拉框 |
+| 选 vendor | 清空后续所有下拉 + 结果；调 `getDistinctItems(vendor)` |
+| 选 item | 清空后续下拉；调 `getDistinctSubItems(vendor, item)` |
+| 选 sub_item | 清空版本日期 + 业务行筛选；调 `getDistinctVersionDates(vendor, item, sub_item)` |
+| 选 version_dates | 清空业务行筛选；调 `lookupCountries({vendor, item, sub_item, version_dates})` |
+| 选 countries | 清空下级；调 `lookupCategories({..., countries})` |
+| 选 categories | 清空下级；调 `lookupConfigNames({..., countries, categories})` |
+| 选 years | 清空 weeks；调 `lookupWeeksOfMonth`（单个 year，直接用 `Number(form.years)` 作为参数）|
+| 选 months | 清空 weeks；调 `lookupWeeksOfMonth` |
+| 点「查询」| 校验 canQuery（4 必填 + 至少一个时间维度）；调 `queryPivot(buildRequest())` |
+| buildRequest 类型注意 | `form.years` 是单个字符串（如 `"2026"`），后端 `years: list[int]` 要求数组。`buildRequest` 中 `[Number(form.years)]` 包为单元素数组；`months` / `weeks` 来自 `el-select` 的 `:value` 数字，无需转换。 |
+| 查询成功 | 渲染透视表；toast `查询完成：N 行 · M 个日期列` |
+| 查询失败 422 | `showApiError(err)`（Pydantic 级联校验失败 / 笛卡尔积超限） |
+| 查询失败 500 | `showApiError(err)`（week_dt 表不存在 / DB 不可达） |
+| 点「重置」| 全部清空 + 重新加载 vendors |
+
+#### 级联校验提示
+
+前端在筛选区底部展示 `el-alert` 级联提示（`cascadeHint` 计算属性）：
+- `config_names` 已选但 `categories` 未选 → 提示「已选择 config_names，请同时选择 categories 与 countries」
+- `categories` 已选但 `countries` 未选 → 提示
+- `weeks` 已选但 `months` 未选 → 提示
+- 三个时间维度都未选 → 提示「请至少选择一个时间维度（years / months / weeks）」（注：`years` 有默认值恒不为空，此分支仅在极端情况下触发）
+
+> 提示仅做 UI 引导，不阻断操作；后端 Pydantic 级联校验是最终守门人。
+
+#### 透视表渲染
+
+| 元素 | 说明 |
+|------|------|
+| 固定列（左侧） | 7 列，顺序：`version_date` / country / category / config_code / config_name / data_type / ttl |
+| 冻结列 | `version_date` 列 `fixed="left"` 首位冻结（横向滚动时版本日期始终可见） |
+| 动态列（右侧） | `result.period_columns` 中每个日期一列（按周为周起始日 YYYY-MM-DD，按日为每天 YYYY-MM-DD） |
+| 交叉点 — 非 0 | `quantity > 0` → 加粗（`font-weight: 600`）+ 深色（`#303133`），class `nonzero-cell` |
+| 交叉点 — 0 | `quantity === 0` 或缺失 → 灰色 `#c0c4cc`，class `zero-cell` |
+| 表头 | 结果卡 header 显示：`✓ 查询结果` + tag（N 行 / M 个日期列 / K 个版本 / 按周/按日） |
+| 空数据 | `total_rows === 0` → 居中提示「该筛选条件下无匹配数据。请缩小筛选范围或选择其他时间维度。」 |
+| 滚动 | `el-table` 固定 `height="600"`，水平溢出 `overflow-x: auto` |
+
+#### 按钮状态
+
+| 场景 | 「查询」 | 「重置」 |
+|------|---------|---------|
+| 初始 | disabled（4 必填不全） | 可点 |
+| 必填项不完整 | disabled | 可点 |
+| 4 必填齐全（years 有默认值） | 可点 | 可点 |
+| 查询中 | loading + disabled | disabled |
+| 查询成功 | 可点 | 可点 |
+| 重置后 | 回初始 | 初始状态 |
+
 ---
 
 ## 3. 错误码 → UI 文案（沿用 global §3.5.4 + 本模块定制）
@@ -337,6 +418,8 @@
 | 413 | 后端 detail「file exceeds 20 MB limit」| `ElMessage.error` |
 | 415 | 后端 detail「file must be .xlsx MIME type」| `ElMessage.error` |
 | 422 | 后端 detail「sheet 'DSP' not found」/ 必填字段缺失 | `ElMessage.error` |
+| 422 | 透视查询：Pydantic 级联校验失败 / 笛卡尔积预检超出 MAX_CARTESIAN(50000) | `showApiError(err)` → `ElMessage.error(detail)` |
+| 500 | 透视查询：SQLAlchemy 异常（如 week_dt 表不存在） | `showApiError(err)` → `ElMessage.error(detail)` |
 | 5xx | 拦截器兜底 | `ElMessage.error('服务异常，请稍后重试')` |
 | 网络 | 拦截器兜底 | `ElMessage.error('网络异常，请稍后重试')` |
 
@@ -360,6 +443,14 @@
 | 预览表空数据 | 「该批次无事实行（所有数据均被规则跳过）」 |
 | 文件名解析失败 | 「文件名解析失败，请确保文件名 ≥ 3 段（按 - 分隔）」 |
 | 文件类型错 | 「仅支持 .xlsx 文件」 |
+| 透视查询 — 查询成功 | 「查询完成：{N} 行 · {M} 个日期列」 |
+| 透视查询 — 无数据 | 「该筛选条件下无匹配数据。请缩小筛选范围或选择其他时间维度。」 |
+| 透视查询 — 必填项不完整 | 「请先完成必填项：供应商 / 业务项 / 子业务项 / 版本日期，且至少选择一个时间维度」 |
+| 透视查询 — 级联提示（config_names 缺 categories） | 「已选择 config_names，请同时选择 categories 与 countries」 |
+| 透视查询 — 级联提示（categories 缺 countries） | 「已选择 categories，请同时选择 countries」 |
+| 透视查询 — 级联提示（weeks 缺 years+months） | 「已选择 weeks，请同时选择 years 与 months」 |
+| 透视查询 — 级联提示（months 缺 years） | 「已选择 months，请同时选择 years」 |
+| 透视查询 — 级联提示（无时间维度） | 「请至少选择一个时间维度（years / months / weeks）」 |
 
 ---
 
@@ -421,6 +512,37 @@
 | 409 错误：detail 不含 upload_id 退化路径 | 走 `ElMessageBox.alert`（同 v0.5.1 行为） |
 | 全清 → reset | selectedFile / form / uploadResult 全 null/empty |
 
+### 5.5 API 层 `api/pivot_query.js`（v0.5.6 新增）
+
+| 用例 | 期望 |
+|------|------|
+| `queryPivot(req)` | POST `/pivot-query`；请求体 = req；返回 `PivotQueryResponse` |
+| `lookupCountries(base)` | GET `/pivot-query/lookups/countries`；params 含 vendor/item/sub_item/version_dates(逗号分隔) |
+| `lookupCategories(base)` | GET `/pivot-query/lookups/categories`；params 额外含 countries(逗号分隔) |
+| `lookupConfigNames(base)` | GET `/pivot-query/lookups/config-names`；params 额外含 categories(逗号分隔) |
+| `lookupWeeksOfMonth(year, month)` | GET `/pivot-query/lookups/weeks-of-month`；params 含 year/month |
+
+### 5.6 View `views/PivotQuery.vue`（v0.5.6 新增）
+
+| 用例 | 期望 |
+|------|------|
+| DOM 烟雾渲染 | `.pivot-view` 存在；`.form-card` 存在；初始无 `.result-card` |
+| 初始 canQuery | false（vendor/item/sub_item/version_dates/时间维度都空） |
+| 级联：选 vendor → 拉 items | `getDistinctItems` 被调用；itemOptions 更新 |
+| 级联：选 item → 拉 sub_items | `getDistinctSubItems` 被调用 |
+| 级联：选 sub_item → 拉 version_dates | `getDistinctVersionDates` 被调用 |
+| 级联：选 version_dates → 拉 countries | `lookupCountries` 被调用；countries 清空 |
+| 级联：选 countries → 拉 categories | `lookupCategories` 被调用 |
+| 级联：选 categories → 拉 config_names | `lookupConfigNames` 被调用 |
+| 级联：选 years → 拉 weeks | `lookupWeeksOfMonth` 被调用（遍历 years × months） |
+| canQuery 条件 | 4 必填 + 至少一个时间维度 → true |
+| buildRequest 构造 | 只包含非空字段；expand_to_daily 由 date_granularity 决定 |
+| 查询成功 | `.result-card` 出现；el-table 有 row_groups + 动态 period_columns 列 |
+| 查询成功 toast | `查询完成：N 行 · M 个日期列` |
+| cellQty 辅助 | `quantities[date]` 存在 → 返回值；不存在 → 0 |
+| 无数据 | `total_rows === 0` → 空提示文案 |
+| 重置 | 所有 form 字段清空；所有 options 清空；result 清空；重新加载 vendors |
+
 ---
 
 ## 6. 不实现的组件（明确范围）
@@ -430,7 +552,12 @@
 - 不在路由切换时自动 `store.reset()`（用户决定何时清）；
 - el-upload 组件**没有采用** Element Plus 的 `<el-upload>` —— 直接用原生隐藏 `<input type="file">`，简化文件名校验与 store 联动；
 - 不引入拖拽上传（v0.5.2 仅点击触发）；
-- v0.5.2 起「重置」不再强制——选新文件即隐式重置；保留按钮作为手动清理入口。
+- v0.5.2 起「重置」不再强制——选新文件即隐式重置；保留按钮作为手动清理入口；
+- **v0.5.6 新**：透视查询不实现 `pivot_type='demand_plus_supply'` 的具体行为（UI 上 disabled）；
+- **v0.5.6 新**：透视查询不实现结果缓存（每次查询重新请求）；
+- **v0.5.6 新**：透视查询不实现自定义排序（默认 `ORDER BY c.dt` 升序）；
+- **v0.5.6 新**：透视查询不实现结果分页（单次返回全部数据，硬上限通过笛卡尔积预检保证）；
+- **v0.5.6 新**：透视查询不实现跨版本 quantity 合并（每个 version_date 独立成行）。
 
 ---
 
@@ -451,6 +578,16 @@
 - [x] 409 + 用户选「替换」→ DELETE + POST 完成，结果卡刷新
 - [x] 409 + 用户选「取消」→ 表单保留，不调 DELETE
 - [x] 文件名 `dsp_upload.md` → `weekly_demand.md`（spec 文件名同步重命名）
+- [x] `frontend/src/views/PivotQuery.vue` / `api/pivot_query.js` 有 docstring（JSDoc 中文）
+- [x] Hub 第 4 张卡片「透视查询」显示并跳 `/pivot-query`
+- [x] 透视查询页：4 必填 + 至少一个时间维度 + 「查询」按钮 enable/disable 切换
+- [x] 透视查询页：业务行级联（countries → categories → config_names）联动正确
+- [x] 透视查询页：时间维度级联（years → months → weeks）联动正确
+- [x] 透视查询页：查询成功 → 透视表渲染（固定列 + 动态 period_columns + 交叉点 quantity）
+- [x] 透视查询页：无数据 → 空提示文案
+- [x] 透视查询页：重置全清 + 重新加载 vendors
+- [x] 透视查询页：422 笛卡尔积超限 / 级联校验失败 → showApiError
+- [x] 透视查询页：cascadeHint 级联提示正确显示
 
 ---
 
@@ -458,6 +595,9 @@
 
 | 版本 | 章节 | 修订 |
 |------|------|------|
+| **v0.5.6** | 头部 / §1.1 / §1.4 / §2.11 / §3 / §4 / §5 / §6 / §7 / §8 | **新增透视查询子模块**：路由 `/pivot-query`；`PivotQuery.vue` + `api/pivot_query.js`；Hub 卡片从 3→4 张；错误码/状态文案/测试计划/不实现组件/验证清单同步更新 |
+| v0.5.6 | §2.11 | 透视查询完整功能点：三组筛选（必填定位 + 业务行级联 + 时间维度）+ 透视表渲染 + 级联提示 + 重置 |
+| v0.5.6 | §5.5 / §5.6 | 新增 API 层 + View 层测试计划（覆盖级联、buildRequest、cellQty、onQuery、onReset、loadWeeks） |
 | **v0.5.4** | 头部 / §1.1 / §1.2 / §1.4 / §2 / §3 / §5 / §6 / §7 / §8 | **模块重命名**：DSP 上传 → 周需求管理；新增 Hub + 查询 + 删除子功能；spec 文件 `dsp_upload.md` → `weekly_demand.md` |
 | v0.5.4 | §2.8 | Hub 页功能点（3 张卡片导航） |
 | v0.5.4 | §2.9 | 查询页功能点（4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览） |

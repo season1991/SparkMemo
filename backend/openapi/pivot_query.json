@@ -1,0 +1,667 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SparkMemo — Pivot Query",
+    "version": "0.5.6",
+    "description": "透视查询模块 OpenAPI（v0.5.6）。\n\n新增 `POST /api/pivot-query`：横向业务行 × 纵向日期 × 交叉点 quantity 的 OLAP 透视。\n新增 4 个 lookup 端点供前端级联下拉使用。\n\n适配后端 spec：backend/spec/weekly_demand.md §透视查询子模块。"
+  },
+  "paths": {
+    "/api/pivot-query": {
+      "post": {
+        "tags": [
+          "pivot-query"
+        ],
+        "summary": "Pivot Query Endpoint",
+        "description": "透视查询：横向业务行 × 纵向日期 × 交叉点 quantity。\n\n流程：\n1. Pydantic 自动校验 pivot_type / vendor / item / sub_item / version_dates 与\n   业务行级联 / 时间维度级联 / 至少一个时间维度 → 失败时 FastAPI 自动 422\n2. CRUD 层 estimate_size() 估算笛卡尔积 → 超出 MAX_CARTESIAN 时返回 422\n3. CRUD 层 query_pivot() 执行 CTE 共享查询，返回长格式响应\n\nv0.5.6：仅支持 pivot_type='demand'（固定注入 data_type='Demand'）；\npivot_type='demand_plus_supply' 占位（Schema 接受但行为等同 'demand'）。",
+        "operationId": "pivot_query_endpoint_api_pivot_query_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PivotQueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PivotQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Pydantic 级联校验失败 / 笛卡尔积预检超出 MAX_CARTESIAN(50000)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "SQLAlchemy 异常（如 week_dt 表不存在 / DB 不可达）"
+          }
+        }
+      }
+    },
+    "/api/pivot-query/lookups/countries": {
+      "get": {
+        "tags": [
+          "pivot-query-lookups"
+        ],
+        "summary": "Get Business Countries",
+        "description": "返回指定 (vendor+item+sub_item+version_dates) 下所有去重 country。\n\n仅 Demand 行纳入（与透视查询主路径对齐）。按字母升序。",
+        "operationId": "get_business_countries_api_pivot_query_lookups_countries_get",
+        "parameters": [
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Vendor"
+            }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Item"
+            }
+          },
+          {
+            "name": "sub_item",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Sub Item"
+            }
+          },
+          {
+            "name": "version_dates",
+            "in": "query",
+            "required": false,
+            "description": "逗号分隔 YYYY-MM-DD；空=不限",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Version Dates"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Business Countries"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pivot-query/lookups/categories": {
+      "get": {
+        "tags": [
+          "pivot-query-lookups"
+        ],
+        "summary": "Get Business Categories",
+        "description": "返回指定条件下（已选 countries 时再过滤）去重 category。按字母升序。",
+        "operationId": "get_business_categories_api_pivot_query_lookups_categories_get",
+        "parameters": [
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Vendor"
+            }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Item"
+            }
+          },
+          {
+            "name": "sub_item",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Sub Item"
+            }
+          },
+          {
+            "name": "version_dates",
+            "in": "query",
+            "required": false,
+            "description": "逗号分隔 YYYY-MM-DD；空=不限",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Version Dates"
+            }
+          },
+          {
+            "name": "countries",
+            "in": "query",
+            "required": false,
+            "description": "逗号分隔 country；空=不限",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Countries"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Business Categories"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pivot-query/lookups/config-names": {
+      "get": {
+        "tags": [
+          "pivot-query-lookups"
+        ],
+        "summary": "Get Business Config Names",
+        "description": "返回指定条件下（已选 countries + categories 时再过滤）去重 config_name。按字母升序。",
+        "operationId": "get_business_config_names_api_pivot_query_lookups_config_names_get",
+        "parameters": [
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Vendor"
+            }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Item"
+            }
+          },
+          {
+            "name": "sub_item",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Sub Item"
+            }
+          },
+          {
+            "name": "version_dates",
+            "in": "query",
+            "required": false,
+            "description": "逗号分隔 YYYY-MM-DD；空=不限",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Version Dates"
+            }
+          },
+          {
+            "name": "countries",
+            "in": "query",
+            "required": false,
+            "description": "逗号分隔 country；空=不限",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Countries"
+            }
+          },
+          {
+            "name": "categories",
+            "in": "query",
+            "required": false,
+            "description": "逗号分隔 category；空=不限",
+            "schema": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "title": "Categories"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "title": "Response Get Business Config Names"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pivot-query/lookups/weeks-of-month": {
+      "get": {
+        "tags": [
+          "pivot-query-lookups"
+        ],
+        "summary": "Get Weeks Of Month",
+        "description": "返回指定 ISO 年 + 自然月的所有 (week_id, week_start_date)。\n\n- week_id：ISO 周编号 1-53\n- week_start_date：该周周一的日期（YYYY-MM-DD）\n- 按 dt 升序",
+        "operationId": "get_weeks_of_month_api_pivot_query_lookups_weeks_of_month_get",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "description": "ISO 年（week_id 所属年份）",
+            "schema": {
+              "type": "integer",
+              "minimum": 1970,
+              "maximum": 2100,
+              "title": "Year"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "description": "自然月 1-12",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12,
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WeekInfo"
+                  },
+                  "title": "Response Get Weeks Of Month"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "month 不在 1-12",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PivotQueryRequest": {
+        "type": "object",
+        "required": ["vendor", "item", "sub_item", "version_dates"],
+        "properties": {
+          "pivot_type": {
+            "type": "string",
+            "enum": ["demand", "demand_plus_supply"],
+            "default": "demand",
+            "title": "Pivot Type",
+            "description": "v0.5.6 固定 'demand'；'demand_plus_supply' 占位待后续实现"
+          },
+          "vendor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "title": "Vendor"
+          },
+          "item": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "title": "Item"
+          },
+          "sub_item": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "title": "Sub Item"
+          },
+          "version_dates": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minLength": 1,
+            "maxLength": 20,
+            "title": "Version Dates",
+            "description": "1-20 个 YYYY-MM-DD"
+          },
+          "countries": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "null" }
+            ],
+            "title": "Countries",
+            "description": "可选：按 country 过滤业务行"
+          },
+          "categories": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "null" }
+            ],
+            "title": "Categories",
+            "description": "可选：级联——传 config_names 时必填"
+          },
+          "config_codes": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "null" }
+            ],
+            "title": "Config Codes",
+            "description": "可选：按 config_code 精确过滤"
+          },
+          "config_names": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "null" }
+            ],
+            "title": "Config Names",
+            "description": "可选：级联——传时必填 categories → 必填 countries"
+          },
+          "years": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "integer" } },
+              { "type": "null" }
+            ],
+            "title": "Years",
+            "description": "可选：级联——传 months 时必填；传 weeks 时必填"
+          },
+          "months": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "integer" } },
+              { "type": "null" }
+            ],
+            "title": "Months",
+            "description": "可选：1-12；级联——传 weeks 时必填"
+          },
+          "weeks": {
+            "anyOf": [
+              { "type": "array", "items": { "type": "integer" } },
+              { "type": "null" }
+            ],
+            "title": "Weeks",
+            "description": "可选：1-53；级联——传时必填 years AND months"
+          },
+          "expand_to_daily": {
+            "type": "boolean",
+            "default": false,
+            "title": "Expand To Daily",
+            "description": "true 时去掉 is_week_start=1 过滤，按每天展开"
+          }
+        },
+        "description": "透视查询请求体。\n\n入参分四组：\n1. 必填定位：pivot_type / vendor / item / sub_item / version_dates（≥1）\n2. 横向业务行筛选（可选）：countries / categories / config_codes / config_names\n   - 严格级联：config_names → categories → countries\n3. 纵向日期筛选（可选）：years / months / weeks\n   - 级联：weeks → (months AND years) → years\n   - 至少一个：years / months / weeks 其一\n4. 展示控制：expand_to_daily（默认 false = 按周；true = 按日）\n\n级联校验失败 → Pydantic 422。"
+      },
+      "PivotRow": {
+        "type": "object",
+        "required": ["version_date", "quantities"],
+        "properties": {
+          "country": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "title": "Country"
+          },
+          "category": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "title": "Category"
+          },
+          "config_code": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "title": "Config Code"
+          },
+          "config_name": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "title": "Config Name"
+          },
+          "data_type": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "title": "Data Type"
+          },
+          "ttl": {
+            "anyOf": [
+              { "type": "integer" },
+              { "type": "null" }
+            ],
+            "title": "Ttl"
+          },
+          "version_date": {
+            "type": "string",
+            "title": "Version Date"
+          },
+          "quantities": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" },
+            "title": "Quantities",
+            "description": "key = period_date（YYYY-MM-DD），value = quantity（COALESCE 兜底 0）"
+          }
+        },
+        "description": "透视表的一行（横向）：业务维度组合 + 多个版本日期的 quantity 列。\n\nquantities 字典的 key 是 period_date（按周为周起始日，按日为每天），\nvalue 是 quantity（缺失时由后端 COALESCE 为 0）。"
+      },
+      "PivotQueryResponse": {
+        "type": "object",
+        "required": ["period_columns", "row_groups", "total_rows", "version_dates", "date_granularity"],
+        "properties": {
+          "period_columns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "title": "Period Columns",
+            "description": "纵向展开成列头的日期列表（升序），前端用作表头"
+          },
+          "row_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PivotRow"
+            },
+            "title": "Row Groups",
+            "description": "横向分组的行列表"
+          },
+          "total_rows": {
+            "type": "integer",
+            "title": "Total Rows"
+          },
+          "version_dates": {
+            "type": "array",
+            "items": { "type": "string" },
+            "title": "Version Dates",
+            "description": "实际参与查询的版本日期列表"
+          },
+          "date_granularity": {
+            "type": "string",
+            "enum": ["week", "day"],
+            "title": "Date Granularity",
+            "description": "week = 按周（周起始日），day = 按日"
+          }
+        },
+        "description": "透视查询响应。\n\n- period_columns：纵向展开成列头的日期列表（升序），前端用作表头\n- row_groups：横向分组的行列表，每行包含业务维度 + 各 period 的 quantity\n- date_granularity：标识返回的 period 是按周（'week'）还是按日（'day'）"
+      },
+      "WeekInfo": {
+        "type": "object",
+        "required": ["week_id", "week_start_date"],
+        "properties": {
+          "week_id": {
+            "type": "integer",
+            "title": "Week Id",
+            "description": "ISO 周编号（1-53）"
+          },
+          "week_start_date": {
+            "type": "string",
+            "title": "Week Start Date",
+            "description": "该周周一的日期（YYYY-MM-DD）"
+          }
+        },
+        "description": "单条「ISO 周编号 + 周起始日（周一）」映射。\n\n注：ISO 周历下，周一为一周的第一天；week_id 归属的「ISO 年」与 week_start_date\n的自然年可能不同（如 2025-W01 起始于 2024-12-30）。"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "integer" }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": ["loc", "msg", "type"],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

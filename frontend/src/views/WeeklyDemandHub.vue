@@ -1,16 +1,17 @@
 <script setup>
 /**
- * 周需求管理 Hub 页（路由 /dsp-uploads，v0.5.4）。
+ * 周需求管理 Hub 页（路由 /dsp-uploads，v0.5.6）。
  *
- * 3 张功能卡片导航到 3 个子功能页面：
+ * 4 张功能卡片导航到 4 个子功能页面：
  * - DSP 上传：/dsp-uploads/upload
  * - 查询：/dsp-uploads/query
  * - 删除：/dsp-uploads/delete
+ * - 透视查询：/pivot-query（v0.5.6 新增）
  *
  * 全局规则遵循 frontend/spec/README.md（220 导航 + 56 页面页头 + 1440 主内容区 + 720 子卡片宽度）。
  */
 import { useRouter } from 'vue-router'
-import { Upload, Search, Delete } from '@element-plus/icons-vue'
+import { Upload, Search, Delete, DataLine } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
@@ -35,6 +36,13 @@ const cards = [
     desc: '按 4 字段定位批次 → 预览元数据与「即将删除 N 行」警告 → 二次确认 → 整批 DELETE（CASCADE 清事实行）。',
     icon: Delete,
     to: '/dsp-uploads/delete'
+  },
+  {
+    key: 'pivot',
+    title: '透视查询',
+    desc: 'v0.5.6 新增。横向业务行 × 纵向日期 × 交叉点 quantity 的 OLAP 风格透视；支持多版本日期对比，按周/按日粒度切换。',
+    icon: DataLine,
+    to: '/pivot-query'
   }
 ]
 
@@ -47,7 +55,7 @@ function go(to) {
   <div class="hub">
     <h2 class="page-title">周需求管理</h2>
     <p class="page-hint">
-      管理 DSP 周预测数据的 3 个子功能。请选择要进入的功能。
+      管理 DSP 周预测数据的 4 个子功能。请选择要进入的功能。
     </p>
 
     <div class="card-grid">
@@ -90,7 +98,7 @@ function go(to) {
 }
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
 }
 @media (max-width: 1024px) {
