@@ -640,7 +640,7 @@ WITH base_rows AS (
     FROM dsp_upload_rows
     JOIN dsp_uploads ON dsp_upload_rows.upload_id = dsp_uploads.id
     WHERE vendor=? AND item=? AND sub_item=? AND version_date IN (?)
-      AND data_type = 'Demand'                              -- v0.5.6 固定
+      AND data_type IN ('Demand', 'Supply')                  -- v0.5.7: 两模式都查
       AND [country/category/config_code/config_name 筛选]
 )
 SELECT
@@ -658,15 +658,20 @@ LEFT JOIN (subquery_d) d                                     -- 交叉点 quanti
 ORDER BY c.dt
 ```
 
+> **v0.5.7 变更**：
+> - `base_rows` CTE 过滤条件从 `data_type = 'Demand'` 改为 `data_type IN ('Demand', 'Supply')`，覆盖两种模式。
+> - `demand` 模式下 `b` 子查询 GROUP BY 仍含 `data_type`，保留 `data_type='Demand'` 的去重行；`demand_plus_supply` 模式下 `b` 子查询 GROUP BY **去掉 `data_type`**，仅按业务维度去重，使 Demand 和 Supply 配对到同一业务组（详见 §11）。
+> - `demand` 模式的 SQL 主路径不变；`demand_plus_supply` 模式的 TTL_GAP / Rolling_TTLGAP 计算在 Python 层完成（详见 §11.3），不引入额外 SQL 复杂度。
+
 ### 4. 入参 `PivotQueryRequest`
 
 | 字段 | 类型 | 必填 | 校验 |
 |------|------|------|------|
-| `pivot_type` | `'demand' \| 'demand_plus_supply'` | 是 | v0.5.6 固定 `'demand'`；`'demand_plus_supply'` 占位 |
+| `pivot_type` | `'demand' \| 'demand_plus_supply'` | 是 | `'demand'` 固定过滤 `data_type='Demand'`；`'demand_plus_supply'` 查询 Demand + Supply 并计算 TTL_GAP / Rolling_TTLGAP（见 §11） |
 | `vendor` | string (1-64) | 是 | — |
 | `item` | string (1-128) | 是 | — |
 | `sub_item` | string (1-128) | 是 | — |
-| `version_dates` | list[string] (1-20) | 是 | 每项 `YYYY-MM-DD` |
+| `version_dates` | list[string] | 是 | 每项 `YYYY-MM-DD`；`demand` 模式 1-20 个（多选）；`demand_plus_supply` 模式**仅 1 个**（单选，超限 → 422，见 §11.1） |
 | `countries` | list[string] | 否 | — |
 | `categories` | list[string] | 否 | **级联**：传 `config_names` 时必填 |
 | `config_codes` | list[string] | 否 | — |
@@ -677,6 +682,8 @@ ORDER BY c.dt
 | `expand_to_daily` | bool (default false) | 否 | true 时去掉 `is_week_start=1` 过滤，按每天展开 |
 
 ### 5. 出参 `PivotQueryResponse`
+
+`demand` 模式示例：
 
 ```json
 {
@@ -703,6 +710,77 @@ ORDER BY c.dt
 }
 ```
 
+`demand_plus_supply` 模式示例（每业务组产出 4 行：Demand / Supply / TTL_GAP / Rolling_TTLGAP）：
+
+```json
+{
+  "period_columns": ["2026-07-06", "2026-07-13", "2026-07-20"],
+  "row_groups": [
+    {
+      "country": "爱尔兰",
+      "category": "交换机整机",
+      "config_code": "X123",
+      "config_name": "32Q-TOR-T3",
+      "data_type": "Demand",
+      "ttl": 4,
+      "version_date": "2026-06-29",
+      "quantities": {
+        "2026-07-06": 100,
+        "2026-07-13": 80,
+        "2026-07-20": 50
+      }
+    },
+    {
+      "country": "爱尔兰",
+      "category": "交换机整机",
+      "config_code": "X123",
+      "config_name": "32Q-TOR-T3",
+      "data_type": "Supply",
+      "ttl": 4,
+      "version_date": "2026-06-29",
+      "quantities": {
+        "2026-07-06": 120,
+        "2026-07-13": 90,
+        "2026-07-20": 60
+      }
+    },
+    {
+      "country": "爱尔兰",
+      "category": "交换机整机",
+      "config_code": "X123",
+      "config_name": "32Q-TOR-T3",
+      "data_type": "TTL_GAP",
+      "ttl": 4,
+      "version_date": "2026-06-29",
+      "quantities": {
+        "2026-07-06": 20,
+        "2026-07-13": 10,
+        "2026-07-20": 10
+      }
+    },
+    {
+      "country": "爱尔兰",
+      "category": "交换机整机",
+      "config_code": "X123",
+      "config_name": "32Q-TOR-T3",
+      "data_type": "Rolling_TTLGAP",
+      "ttl": 4,
+      "version_date": "2026-06-29",
+      "quantities": {
+        "2026-07-06": 20,
+        "2026-07-13": 30,
+        "2026-07-20": 40
+      }
+    }
+  ],
+  "total_rows": 4,
+  "version_dates": ["2026-06-29"],
+  "date_granularity": "week"
+}
+```
+
+> **v0.5.7 变更**：`demand_plus_supply` 模式下 `row_groups` 中每组业务维度产出 4 行（`data_type` 依次为 `Demand` / `Supply` / `TTL_GAP` / `Rolling_TTLGAP`），TTL_GAP 和 Rolling_TTLGAP 的计算规则详见 §11。
+
 ### 6. 数据量保护
 
 | 保护项 | 触发 | 行为 |
@@ -711,24 +789,24 @@ ORDER BY c.dt
 | **必须传时间维度** | `years/months/weeks` 都未传 | Pydantic 422 |
 | **级联校验** | 违反任一级联规则 | Pydantic 422 |
 | **`week_dt` 表不存在** | 首次访问 | 500（运维责任：本项目不创建该表） |
+| **demand_plus_supply 版本日期单选** | `pivot_type='demand_plus_supply'` 且 `len(version_dates) > 1` | Pydantic 422 |
 
 ### 7. 错误约定
 
 | HTTP | 场景 |
 |------|------|
-| 422 | Pydantic 级联校验失败 / 笛卡尔积预检超出 |
+| 422 | Pydantic 级联校验失败 / 笛卡尔积预检超出 / **`pivot_type='demand_plus_supply'` 时 `version_dates` 超过 1 个** |
 | 500 | SQLAlchemy 异常（如 `week_dt` 表不存在 / DB 不可达） |
 
 ### 8. 不实现的组件（明确范围）
 
-- **`pivot_type='demand_plus_supply'` 的具体行为**：v0.5.6 暂不实现，Schema 接受该值但行为等同 `'demand'`。
 - **透视结果缓存**：首次实现不引入。
 - **按行/列细粒度排序**：默认 `ORDER BY c.dt`（period_date 升序），不支持自定义排序。
-- **前端**：本轮纯后端，前端 UI 由后续任务实现。
 - **`week_dt` 表创建**：外部依赖，由调用方保证表存在。
 - **跨版本 quantity 合并**：每个 `version_date` 独立成行（`row_groups` 中是分开的对象），不合并求和。
 - **透视结果分页**：单次响应无分页，硬上限通过笛卡尔积预检保证。
-- **多表 JOIN 优化**：v0.5.6 使用 CTE 共享 dsp_upload_rows 一次扫描；不引入物化视图。
+- **多表 JOIN 优化**：使用 CTE 共享 dsp_upload_rows 一次扫描；不引入物化视图。
+- **TTL_GAP / Rolling_TTLGAP 落库**：两个派生 data_type 是纯运算结果，不写入 `dsp_upload_rows`，每次查询实时计算（详见 §11.4）。
 
 ### 9. Test Plan（新增）
 
@@ -768,6 +846,71 @@ ORDER BY c.dt
 
 ---
 
+### 11. Demand+Supply 计算规则（v0.5.7 新增）
+
+> `pivot_type='demand_plus_supply'` 时启用以下逻辑；`pivot_type='demand'` 时完全不受影响，沿用 §3 的主查询路径。
+
+#### 11.1 入参约束
+
+- `version_dates` 仅允许 1 个元素（单选）；Pydantic 校验 `len(version_dates) > 1` → 422（详见 §6 / §7）。
+- 其余字段（vendor / item / sub_item / countries / categories / years / months / weeks / expand_to_daily）与 `demand` 模式一致。
+
+#### 11.2 数据查询
+
+- `base_rows` CTE 过滤条件：`data_type IN ('Demand', 'Supply')`（不再固定为 `'Demand'`），一次扫描同时取两种 data_type。
+- `b` 子查询 GROUP BY **去掉 `data_type`**，仅按 `(upload_id, country, category, config_code, config_name, ttl)` 去重，使同一业务维度下的 Demand 和 Supply 配对到同一组。
+- `d` 子查询保留 `data_type` 字段，供 Python 层区分 Demand / Supply。
+- `a` / `c` 子查询与 `demand` 模式完全相同。
+
+#### 11.3 Python 层后计算
+
+SQL 返回原始行后，Python 层按以下步骤生成最终 `row_groups`：
+
+1. **分组**：按 `(country, category, config_code, config_name, ttl, version_date)` 分组。
+2. **拆分**：每组内按 `data_type` 拆为 Demand 行和 Supply 行。
+3. **缺失兜底**：某组只有 Demand 没有 Supply → Supply quantity 视为 0；反之亦然。
+4. **生成原始行**：保留 Demand 行和 Supply 行（与 `demand` 模式格式一致）。
+5. **计算 TTL_GAP**：
+   - 按 `period_date` 升序排列所有日期。
+   - `TTL_GAP[period_date] = Supply.quantity[period_date] − Demand.quantity[period_date]`。
+   - 生成一行 `data_type='TTL_GAP'` 的记录，其余业务维度与该组相同。
+6. **计算 Rolling_TTLGAP**：
+   - 按 `period_date` 升序排列 TTL_GAP。
+   - `Rolling_TTLGAP[0] = TTL_GAP[0]`。
+   - `Rolling_TTLGAP[i] = Rolling_TTLGAP[i−1] + TTL_GAP[i]`（i ≥ 1）。
+   - 生成一行 `data_type='Rolling_TTLGAP'` 的记录。
+7. **合并**：每组最终产出 4 行（Demand / Supply / TTL_GAP / Rolling_TTLGAP），全部加入 `row_groups`。
+
+#### 11.4 TTL_GAP / Rolling_TTLGAP 不落库
+
+TTL_GAP 和 Rolling_TTLGAP 是纯运算结果，**不写入** `dsp_upload_rows` 表。每次查询实时计算，仅在响应中返回。
+
+#### 11.5 date_granularity 兼容
+
+TTL_GAP / Rolling_TTLGAP 的计算基于 `period_date`，与 `demand` 模式完全一致：
+- `expand_to_daily=False`（默认）→ `period_date` 为周起始日，按周聚合。
+- `expand_to_daily=True` → `period_date` 为每一天，按日聚合。
+
+#### 11.6 示例
+
+假设某分组 `(Country=爱尔兰, Category=交换机整机, ConfigCode=X123, ConfigName=32Q-TOR-T3, TTL=4)` 在版本日期 `2026-06-29` 下：
+
+| period_date | Demand | Supply | TTL_GAP | Rolling_TTLGAP |
+|-------------|--------|--------|---------|----------------|
+| 2026-07-06  | 100    | 120    | 20      | 20             |
+| 2026-07-13  | 80     | 90     | 10      | 30             |
+| 2026-07-20  | 50     | 60     | 10      | 40             |
+
+该分组在 `row_groups` 中产出 4 行，每行含 3 个 `period_date` 的 `quantity`：
+- `data_type='Demand'` 行：`{06: 100, 13: 80, 20: 50}`
+- `data_type='Supply'` 行：`{06: 120, 13: 90, 20: 60}`
+- `data_type='TTL_GAP'` 行：`{06: 20, 13: 10, 20: 10}`
+- `data_type='Rolling_TTLGAP'` 行：`{06: 20, 13: 30, 20: 40}`
+
+完整 JSON 示例见 §5。
+
+---
+
 ### v0.5.5 → v0.5.6（新增透视查询子模块）
 
 | 章节 | v0.5.5 | v0.5.6 |
@@ -779,3 +922,18 @@ ORDER BY c.dt
 | §不实现的组件 | 11 项 | **追加 8 项**（pivot_type='demand_plus_supply' 待定、不引入前端、不创建 week_dt 表等） |
 | 后端代码 | `crud/dsp_upload.py` + `api/dsp_uploads.py` | **新增 `crud/pivot_query.py` + `api/pivot_query.py`** |
 | 测试 | `test_dsp_upload.py` | **新增 `test_pivot_query.py`** |
+
+### v0.5.6 → v0.5.7（实现 demand_plus_supply 模式）
+
+| 章节 | v0.5.6 | v0.5.7 |
+|------|--------|--------|
+| §3 核心 SQL | `base_rows` 过滤 `data_type = 'Demand'` | 改为 `data_type IN ('Demand', 'Supply')`；`demand_plus_supply` 模式下 `b` 子查询 GROUP BY 去掉 `data_type` |
+| §4 入参 `pivot_type` | `'demand'` 固定；`'demand_plus_supply'` 占位 | `'demand'` 固定过滤 Demand；`'demand_plus_supply'` 查询 Demand + Supply 并计算 TTL_GAP / Rolling_TTLGAP |
+| §4 入参 `version_dates` | 1-20 个 | `demand_plus_supply` 模式**仅 1 个**（单选，超限 → 422） |
+| §5 出参示例 | 仅 `demand` 模式 | **新增 `demand_plus_supply` 模式 JSON 示例**（每组 4 行：Demand / Supply / TTL_GAP / Rolling_TTLGAP） |
+| §6 数据量保护 | 4 项 | **追加**：`demand_plus_supply` 版本日期单选校验 → 422 |
+| §7 错误约定 | 422 / 500 | **追加**：422 新场景（`version_dates` 超过 1 个） |
+| §8 不实现 | 含 `demand_plus_supply` 占位 | **删除**该占位项；**新增**「TTL_GAP / Rolling_TTLGAP 不落库」 |
+| §11 Demand+Supply 计算规则 | 不存在 | **新增整章**：入参约束 / 数据查询 / Python 层后计算 7 步流程 / 不落库 / date_granularity 兼容 / 完整示例 |
+| 后端代码 | `pivot_query.py` 仅 demand 主路径 | **追加** `demand_plus_supply` 分支（base_rows 过滤 + b/d 子查询调整 + Python 层 TTL_GAP / Rolling_TTLGAP 计算） |
+| 测试 | `test_pivot_query.py` 仅 demand 用例 | **追加**：`demand_plus_supply` 正常路径 / 缺失 Supply / 缺失 Demand / 多日期 Rolling 累计 / version_dates > 1 → 422 / demand 模式回归 |
