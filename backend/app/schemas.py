@@ -463,6 +463,11 @@ class PivotQueryRequest(BaseModel):
        - **级联**：`months` 提供 → 必须提供 `years`
        - **至少一个**：必须提供 `years` / `months` / `weeks` 其一
     4. 展示控制：`expand_to_daily`（默认 False = 按周；True = 按日）
+    5. v0.5.9 新增：`query_diff`（默认 True = 仅 `pivot_type='demand'` 生效）；
+       true 时在响应后处理中按业务组比较所有 version_date 在每个 period_date 上的
+       quantity，全部相等则该日期从 `period_columns` 与各 `quantities` 中移除，
+       否则保留原值；false 沿用 v0.5.7 baseline；`len(version_dates) <= 1` 时
+       函数内部直接跳过（与配置无关）。详见 spec §12。
 
     `pivot_type='demand'` 时固定注入 `data_type='Demand'` 过滤；
     `pivot_type='demand_plus_supply'` 时改为 `data_type IN ('Demand', 'Supply')`，并在响应中
@@ -484,6 +489,7 @@ class PivotQueryRequest(BaseModel):
     months: Optional[list[int]] = None
     weeks: Optional[list[int]] = None
     expand_to_daily: bool = False
+    query_diff: bool = True
 
     @field_validator("version_dates")
     @classmethod

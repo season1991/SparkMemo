@@ -1359,3 +1359,433 @@ class TestDemandPlusSupply:
         assert types == ["Demand", "Supply", "TTL_GAP", "Rolling_TTLGAP"]
         ttl_gap = next(rg for rg in body["row_groups"] if rg["data_type"] == "TTL_GAP")
         assert ttl_gap["quantities"] == {"2026-07-06": 30}
+
+
+# ---------- TC08 (v0.5.9): Demand 跨版本 diff 过滤 (query_diff) ----------
+
+
+def _make_two_versions_facts(
+    v1_qty, v2_qty, *,
+    country="爱尔兰", category="交换机整机",
+    config_code="X123", config_name="32Q-TOR-T3",
+    dates=("2026-07-06", "2026-07-13", "2026-07-20"),
+    week_ids=(27, 28, 29),
+):
+    """构造 2 个 version_date × N 个周起始日的事实行（quantity 各版本独立同值）。
+
+    返回 (facts_v1, facts_v2)：每边 dict 列表，dsp_uploads 批量入库即可。
+    """
+    def _row(qty, dt, wk):
+        return {
+            "country": country, "category": category,
+            "config_code": config_code, "config_name": config_name,
+            "data_type": "Demand", "ttl": 4,
+            "ym": dt[:7], "week": f"WK{wk}", "date": dt,
+            "quantity": qty,
+        }
+    return (
+        [_row(v1_qty, dt, wk) for dt, wk in zip(dates, week_ids)],
+        [_row(v2_qty, dt, wk) for dt, wk in zip(dates, week_ids)],
+    )
+
+
+def _make_week_dt_range(db, factory, dates, week_ids):
+    """注入一组周起始日到 week_dt（仅 is_week_start）。"""
+    for dt, wk in zip(dates, week_ids):
+        factory(db, dt, year_id=int(dt[:4]), month_id=int(dt[5:7]),
+                week_id=wk, is_week_start=True)
+
+
+class TestQueryDiffFilter:
+    """`query_diff=True` 跨多 version_date 后处理：只保留有差异的 period_date。
+
+    见 spec `backend/spec/weekly_demand.md` §12。
+    """
+
+    # ---- #1 ----
+
+    def test_query_diff_default_true_single_version(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """默认 `query_diff=True` + 单版本：函数内部判定 → 跳过过滤，baseline 不变。"""
+        fact_rows = [{
+            "country": "爱尔兰", "category": "交换机整机",
+            "config_code": "X123", "config_name": "32Q-TOR-T3",
+            "data_type": "Demand", "ttl": 4,
+            "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+            "quantity": 100,
+        }]
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29", fact_rows=fact_rows)
+        _make_week_dt_range(
+            db, make_week_dt,
+            ("2026-07-06", "2026-07-13", "2026-07-20"),
+            (27, 28, 29),
+        )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+            # query_diff 字段未显式提供 → 默认 True
+        )
+        assert req.query_diff is True
+
+        result = pivot_query.query_pivot(db, req)
+        # 单版本无对比对象 → baseline 全保留（含 COALESCE 兜底的 0）
+        assert result.period_columns == ["2026-07-06", "2026-07-13", "2026-07-20"]
+        assert result.total_rows == 1
+        assert result.row_groups[0].quantities == {
+            "2026-07-06": 100,
+            "2026-07-13": 0,
+            "2026-07-20": 0,
+        }
+
+    # ---- #2 ----
+
+    def test_query_diff_false_keeps_baseline(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """`query_diff=False` + 多版本 → v0.5.7 baseline：所有日期保留、原值。"""
+        facts_v1, facts_v2 = _make_two_versions_facts(100, 200)
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-15", fact_rows=facts_v1)
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29", fact_rows=facts_v2)
+        _make_week_dt_range(db, make_week_dt,
+                            ("2026-07-06", "2026-07-13", "2026-07-20"),
+                            (27, 28, 29))
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-15", "2026-06-29"],
+            years=[2026],
+            query_diff=False,
+        )
+        result = pivot_query.query_pivot(db, req)
+        assert result.period_columns == ["2026-07-06", "2026-07-13", "2026-07-20"]
+        assert result.total_rows == 2
+        for r in result.row_groups:
+            assert r.quantities == {
+                "2026-07-06": 100 if r.version_date == "2026-06-15" else 200,
+                "2026-07-13": 100 if r.version_date == "2026-06-15" else 200,
+                "2026-07-20": 100 if r.version_date == "2026-06-15" else 200,
+            }
+
+    # ---- #3 ----
+
+    def test_query_diff_strict_equal_drops_date(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """`query_diff=True` + 2 版本 + 某日期两版 quantity 相同 → 该日期剪除。"""
+        # v1: [10, 20, 30], v2: [10, 99, 30] → 仅 07-13 有差异
+        facts_v1 = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 10},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 20},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 30},
+        ]
+        facts_v2 = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 10},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 99},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 30},
+        ]
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-15", fact_rows=facts_v1)
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29", fact_rows=facts_v2)
+        _make_week_dt_range(db, make_week_dt,
+                            ("2026-07-06", "2026-07-13", "2026-07-20"),
+                            (27, 28, 29))
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-15", "2026-06-29"],
+            years=[2026],
+            query_diff=True,
+        )
+        result = pivot_query.query_pivot(db, req)
+        # 07-06 全等剪除；07-13 差异保留；07-20 全等剪除
+        assert result.period_columns == ["2026-07-13"]
+        assert result.total_rows == 2
+        for r in result.row_groups:
+            assert r.quantities == {
+                "2026-07-13": 20 if r.version_date == "2026-06-15" else 99,
+            }
+
+    # ---- #4 ----
+
+    def test_query_diff_partial_diff_keeps_date(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """3 个日期中 2 个有差异、1 个全等 → 保留 2 个差异日期；quantity 为原值（非 delta）。"""
+        # v1: [10, 20, 30], v2: [11, 21, 30]
+        facts_v1 = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 10},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 20},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 30},
+        ]
+        facts_v2 = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 11},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 21},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 30},
+        ]
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-15", fact_rows=facts_v1)
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29", fact_rows=facts_v2)
+        _make_week_dt_range(db, make_week_dt,
+                            ("2026-07-06", "2026-07-13", "2026-07-20"),
+                            (27, 28, 29))
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-15", "2026-06-29"],
+            years=[2026],
+            query_diff=True,
+        )
+        result = pivot_query.query_pivot(db, req)
+        assert result.period_columns == ["2026-07-06", "2026-07-13"]
+        assert result.total_rows == 2
+        for r in result.row_groups:
+            expected = {
+                "2026-07-06": 10 if r.version_date == "2026-06-15" else 11,
+                "2026-07-13": 20 if r.version_date == "2026-06-15" else 21,
+            }
+            assert r.quantities == expected
+            # quantity 是原值，不是 delta（不会是 ±1 / ±x 等差值）
+            for v in r.quantities.values():
+                assert v in (10, 11, 20, 21)
+
+    # ---- #5 ----
+
+    def test_query_diff_multi_business_groups_union_columns(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """业务组 A 仅有 p1 差异、业务组 B 仅有 p2 差异 → period_columns 是并集。
+
+        每个 row_group.quantities 仅保留自己业务组的差异日期；不含对方业务组的差异日期。
+        """
+        # 业务组 A：v1/v2 在 07-06 相同 (100/100)，07-13 不同 (80/90)，07-20 相同 (50/50)
+        facts_a_v1 = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 100},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 80},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 50},
+        ]
+        facts_a_v2 = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 100},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 90},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 50},
+        ]
+        # 业务组 B：v1/v2 在 07-06 相同 (30/30)，07-13 相同 (50/50)，07-20 不同 (20/35)
+        facts_b_v1 = [
+            {"country": "马来西亚", "category": "光模块",
+             "config_code": "Y456", "config_name": "100G-LR4",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 30},
+            {"country": "马来西亚", "category": "光模块",
+             "config_code": "Y456", "config_name": "100G-LR4",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 50},
+            {"country": "马来西亚", "category": "光模块",
+             "config_code": "Y456", "config_name": "100G-LR4",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 20},
+        ]
+        facts_b_v2 = [
+            {"country": "马来西亚", "category": "光模块",
+             "config_code": "Y456", "config_name": "100G-LR4",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 30},
+            {"country": "马来西亚", "category": "光模块",
+             "config_code": "Y456", "config_name": "100G-LR4",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK28", "date": "2026-07-13", "quantity": 50},
+            {"country": "马来西亚", "category": "光模块",
+             "config_code": "Y456", "config_name": "100G-LR4",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK29", "date": "2026-07-20", "quantity": 35},
+        ]
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-15",
+                        fact_rows=facts_a_v1 + facts_b_v1)
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29",
+                        fact_rows=facts_a_v2 + facts_b_v2)
+        _make_week_dt_range(db, make_week_dt,
+                            ("2026-07-06", "2026-07-13", "2026-07-20"),
+                            (27, 28, 29))
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-15", "2026-06-29"],
+            years=[2026],
+            query_diff=True,
+        )
+        result = pivot_query.query_pivot(db, req)
+        # 业务组 A 保 07-13；业务组 B 保 07-20；并集 → period_columns
+        assert result.period_columns == ["2026-07-13", "2026-07-20"]
+        assert result.total_rows == 4  # 2 业务组 × 2 version_date
+        # 业务组 A 的 2 行 quantities 仅含 07-13
+        a_rows = [r for r in result.row_groups
+                  if r.country == "爱尔兰" and r.config_code == "X123"]
+        assert len(a_rows) == 2
+        for r in a_rows:
+            assert r.quantities == {
+                "2026-07-13": 80 if r.version_date == "2026-06-15" else 90,
+            }
+        # 业务组 B 的 2 行 quantities 仅含 07-20
+        b_rows = [r for r in result.row_groups
+                  if r.country == "马来西亚" and r.config_code == "Y456"]
+        assert len(b_rows) == 2
+        for r in b_rows:
+            assert r.quantities == {
+                "2026-07-20": 20 if r.version_date == "2026-06-15" else 35,
+            }
+
+    # ---- #6 ----
+
+    def test_query_diff_does_not_affect_demand_plus_supply(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """`pivot_type='demand_plus_supply'` + `query_diff=True` → 4 行不变，全保留。"""
+        facts = [
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Demand", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 100},
+            {"country": "爱尔兰", "category": "交换机整机",
+             "config_code": "X123", "config_name": "32Q-TOR-T3",
+             "data_type": "Supply", "ttl": 4,
+             "ym": "2026-07", "week": "WK27", "date": "2026-07-06", "quantity": 130},
+        ]
+        # demand_plus_supply 仅支持单 version_date，本身就 < 1 守卫命中
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29", fact_rows=facts)
+        make_week_dt(db, "2026-07-06", year_id=2026, month_id=7,
+                     week_id=27, is_week_start=True)
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand_plus_supply",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+            query_diff=True,
+        )
+        result = pivot_query.query_pivot(db, req)
+        # _apply_diff_filter 不接通 → 4 行 + 全保留
+        assert result.total_rows == 4
+        types = [r.data_type for r in result.row_groups]
+        assert types == ["Demand", "Supply", "TTL_GAP", "Rolling_TTLGAP"]
+        assert result.period_columns == ["2026-07-06"]
+        expected_map = {
+            "Demand": 100,
+            "Supply": 130,
+            "TTL_GAP": 30,        # 130 - 100
+            "Rolling_TTLGAP": 30,  # 累积 = 当前 30
+        }
+        for r in result.row_groups:
+            assert r.quantities == {"2026-07-06": expected_map[r.data_type]}
+
+    # ---- API 端到端 bonus ----
+
+    @pytest.mark.asyncio
+    async def test_query_diff_api_default_drops_equal_dates(
+        self, client, db, make_dsp_upload, make_week_dt
+    ):
+        """API 端到端：默认 query_diff=true + 2 版本 + 某日期两版相同 → period_columns 收缩。"""
+        facts_v1, facts_v2 = _make_two_versions_facts(50, 50)  # 全等 → 全剪除
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-15", fact_rows=facts_v1)
+        make_dsp_upload(db, vendor="Arista", item="X", sub_item="Y",
+                        version_date="2026-06-29", fact_rows=facts_v2)
+        _make_week_dt_range(db, make_week_dt,
+                            ("2026-07-06", "2026-07-13", "2026-07-20"),
+                            (27, 28, 29))
+
+        payload = {
+            "pivot_type": "demand",
+            "vendor": "Arista", "item": "X", "sub_item": "Y",
+            "version_dates": ["2026-06-15", "2026-06-29"],
+            "years": [2026],
+            # query_diff 不传 → 默认 True
+        }
+        resp = await client.post("/api/pivot-query", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        # 3 个日期全等 → period_columns 为空数组
+        assert body["period_columns"] == []
+        # 2 个 row_group（每 version_date 一条），quantities 全空
+        assert body["total_rows"] == 2
+        for rg in body["row_groups"]:
+            assert rg["quantities"] == {}

@@ -127,6 +127,8 @@ describe('PivotQuery buildRequest 构造', () => {
       expand_to_daily: false,
       years: [2026],
       months: [7],
+      // v0.5.9 新增：默认 query_diff=true
+      query_diff: true,
     })
     // 不含空字段
     expect(req.countries).toBeUndefined()
@@ -843,5 +845,307 @@ describe('PivotQuery Excel 导出（v0.5.8）', () => {
     expect(afterCalls).toBe(beforeCalls)
     expect(ElMessageError).toHaveBeenCalledWith(expect.stringContaining('cartesian product'))
     expect(vm.exporting).toBe(false)
+  })
+})
+
+
+// ==================== v0.5.9 Demand 跨版本 diff 过滤 ====================
+
+
+describe('v0.5.9 PivotQuery.query_diff 默认值与 form 字段', () => {
+  it('form 默认 query_diff = true', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    expect(wrapper.vm.form.query_diff).toBe(true)
+  })
+})
+
+describe('v0.5.9 PivotQuery.query_diff 复选框可见性', () => {
+  it('demand 模式显示复选框 (.diff-checkbox)', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    expect(wrapper.find('.diff-checkbox').exists()).toBe(true)
+  })
+
+  it('dps 模式隐藏复选框 (v-if 命中)', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    wrapper.vm.form.pivot_type = 'demand_plus_supply'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.diff-checkbox').exists()).toBe(false)
+  })
+
+  it('dps → demand 后复选框重现', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    wrapper.vm.form.pivot_type = 'demand_plus_supply'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.diff-checkbox').exists()).toBe(false)
+    wrapper.vm.form.pivot_type = 'demand'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.diff-checkbox').exists()).toBe(true)
+  })
+})
+
+describe('v0.5.9 PivotQuery.query_diff 切换清 result / lastQueryRequest', () => {
+  it('切换 query_diff 后 result 与 lastQueryRequest 清空', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    // 模拟已有成功查询结果
+    vm.result = {
+      period_columns: ['2026-07-06'],
+      row_groups: [{ data_type: 'Demand' }],
+      total_rows: 1,
+      version_dates: ['2026-06-29'],
+      date_granularity: 'week',
+    }
+    vm.lastQueryRequest = { pivot_type: 'demand', vendor: 'A', version_dates: ['2026-06-29'] }
+    // 切换 query_diff
+    vm.form.query_diff = false
+    await wrapper.vm.$nextTick()
+    expect(vm.result).toBeNull()
+    expect(vm.lastQueryRequest).toBeNull()
+  })
+
+  it('onReset 还原 query_diff = true', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.query_diff = false
+    vm.onReset()
+    expect(vm.form.query_diff).toBe(true)
+  })
+})
+
+describe('v0.5.9 PivotQuery.buildRequest 携带 query_diff', () => {
+  function fillBase(vm) {
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_dates = ['2026-06-29']
+    vm.form.years = '2026'
+  }
+
+  it('demand 模式默认 query_diff = true', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    fillBase(vm)
+    expect(vm.buildRequest().query_diff).toBe(true)
+  })
+
+  it('demand 模式 + 取消勾选 → query_diff = false', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    fillBase(vm)
+    vm.form.query_diff = false
+    expect(vm.buildRequest().query_diff).toBe(false)
+  })
+
+  it('dps 模式强制 query_diff = false（即使 form.query_diff = true）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    fillBase(vm)
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.version_date_single = '2026-06-29'
+    vm.form.query_diff = true
+    expect(vm.buildRequest().query_diff).toBe(false)
+  })
+})
+
+describe('v0.5.9 PivotQuery 空 period_columns 独立 alert', () => {
+  // 注：stubs:true 下 el-alert 看作 native custom element，class 选择器无法穿透；
+  // 改用 wrapper.html() 字符串搜索（alert 的 title 走 attribute，wrapper.text() 取不到）
+  function htmlContains(wrapper, needle) {
+    return wrapper.html().includes(needle)
+  }
+
+  it('query_diff=true + period_columns=[] + total_rows>0 + demand → 显示 .diff-empty-alert', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.query_diff = true
+    vm.result = {
+      period_columns: [],
+      row_groups: [{ data_type: 'Demand' }, { data_type: 'Demand' }],
+      total_rows: 2,
+      version_dates: ['v1', 'v2'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'diff-empty-alert')).toBe(true)
+    expect(htmlContains(wrapper, '未匹配到')).toBe(true)
+  })
+
+  it('query_diff=false + period_columns=[] → 不显示独立 alert', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.query_diff = false
+    vm.result = {
+      period_columns: [],
+      row_groups: [],
+      total_rows: 0,
+      version_dates: ['v1', 'v2'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'diff-empty-alert')).toBe(false)
+  })
+
+  it('dps 模式 + query_diff=true + period_columns=[] → 不显示独立 alert', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.query_diff = true
+    vm.result = {
+      period_columns: [],
+      row_groups: [],
+      total_rows: 0,
+      version_dates: ['v1', 'v2'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'diff-empty-alert')).toBe(false)
+  })
+
+  it('total_rows=0 + query_diff=true → 沿用 baseline "无匹配数据"，不显示 diff alert', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.query_diff = true
+    vm.result = {
+      period_columns: ['2026-07-06'],
+      row_groups: [],
+      total_rows: 0,
+      version_dates: ['v1', 'v2'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'diff-empty-alert')).toBe(false)
+    // baseline empty-hint 仍存在
+    expect(wrapper.find('.empty-hint').exists()).toBe(true)
+  })
+})
+
+describe('v0.5.9 PivotQuery.formatCellQty / getCellClass 空 cell 渲染', () => {
+  it('formatCellQty 在 quantities[pd]===undefined 时返回 "—"', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    const row = { quantities: {} }
+    expect(vm.formatCellQty(row, '2026-07-06')).toBe('—')
+  })
+
+  it('formatCellQty 在 quantities 字段缺失时返回 "—"（防御）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    expect(vm.formatCellQty({}, '2026-07-06')).toBe('—')
+  })
+
+  it('formatCellQty 在 quantities[pd]=100 时返回 100', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    expect(vm.formatCellQty({ quantities: { '2026-07-06': 100 } }, '2026-07-06')).toBe(100)
+  })
+
+  it('getCellClass 对缺失 quantity 返回 "cell-dash"', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    const row = { data_type: 'Demand', quantities: {} }
+    expect(vm.getCellClass(row, '2026-07-06')).toBe('cell-dash')
+  })
+
+  it('getCellClass 对 Demand 行 v=0 仍返回 zero-cell（baseline 不变）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    const row = { data_type: 'Demand', quantities: { '2026-07-06': 0 } }
+    expect(vm.getCellClass(row, '2026-07-06')).toBe('zero-cell')
+  })
+})
+
+describe('v0.5.9 PivotQuery 结果卡 Diff 已过滤 tag', () => {
+  // 注：stub 下 el-tag 的 slot 文本可能被丢弃；改用 wrapper.html() 字符串搜索
+  function htmlContains(wrapper, needle) {
+    return wrapper.html().includes(needle)
+  }
+
+  it('demand + query_diff=true + 有 result → tag 文本存在', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.query_diff = true
+    vm.result = {
+      period_columns: ['2026-07-06'],
+      row_groups: [{ data_type: 'Demand', version_date: '2026-06-29' }],
+      total_rows: 1,
+      version_dates: ['v1'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'Diff 已过滤')).toBe(true)
+  })
+
+  it('demand + query_diff=false → tag 文本不存在', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.query_diff = false
+    vm.result = {
+      period_columns: ['2026-07-06'],
+      row_groups: [{ data_type: 'Demand', version_date: '2026-06-29' }],
+      total_rows: 1,
+      version_dates: ['v1'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'Diff 已过滤')).toBe(false)
+  })
+
+  it('dps 模式 + query_diff=true → tag 文本不存在', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.query_diff = true
+    vm.result = {
+      period_columns: ['2026-07-06'],
+      row_groups: [
+        { data_type: 'Demand' }, { data_type: 'Supply' },
+        { data_type: 'TTL_GAP' }, { data_type: 'Rolling_TTLGAP' },
+      ],
+      total_rows: 4,
+      version_dates: ['v1'],
+      date_granularity: 'week',
+    }
+    await wrapper.vm.$nextTick()
+    expect(htmlContains(wrapper, 'Diff 已过滤')).toBe(false)
+  })
+})
+
+describe('v0.5.9 PivotQuery.onExport 沿用 lastQueryRequest 的 query_diff', () => {
+  it('改 form.query_diff 但不动 lastQueryRequest → exportPivot 仍接收 lastQueryRequest 的 query_diff', async () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    exportPivotMock.mockResolvedValue(new Blob(['xlsx'], { type: 'application/octet-stream' }))
+
+    // 模拟上次成功查询（query_diff=true），当前 form 改为 false
+    vm.lastQueryRequest = {
+      pivot_type: 'demand',
+      vendor: 'A', item: 'X', sub_item: 'Y',
+      version_dates: ['2026-06-29'],
+      years: [2026],
+      query_diff: true,
+    }
+    vm.form.query_diff = false
+
+    await vm.onExport()
+
+    expect(exportPivotMock).toHaveBeenCalledTimes(1)
+    const req = exportPivotMock.mock.calls[0][0]
+    expect(req.query_diff).toBe(true)  // 沿用 lastQueryRequest 的值，不被 form 覆盖
+  })
+})
+
+describe('v0.5.9 PivotQuery 单版本守卫（后端 no-op，前端不感知差异）', () => {
+  it('单 version_date + query_diff=true → buildRequest.query_diff=true（后端内部 no-op）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_dates = ['2026-06-29']  // 单版本
+    vm.form.years = '2026'
+    vm.form.query_diff = true
+    const req = vm.buildRequest()
+    expect(req.query_diff).toBe(true)
+    expect(req.version_dates.length).toBe(1)
   })
 })

@@ -1,10 +1,10 @@
-# 周需求管理模块规格（前端，v0.5.7 — 透视查询激活 `demand_plus_supply` + 视觉分组）
+# 周需求管理模块规格（前端，v0.5.9 — 透视查询激活 `demand_plus_supply` + 视觉分组 + Demand 跨版本 diff 过滤）
 
 > 适配 OpenAPI：
 > - [../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.7`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead` / `DspUploadListResponse`）
-> - [../../backend/openapi/pivot_query.json](../../backend/openapi/pivot_query.json)（`info.version = 0.5.7`，路径 `/api/pivot-query`；schema `PivotQueryRequest` / `PivotQueryResponse` / `PivotRow` / `WeekInfo`）
-> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.7，含 §11 Demand+Supply 计算规则）
-> 前端实现版本：v0.5.7
+> - [../../backend/openapi/pivot_query.json](../../backend/openapi/pivot_query.json)（`info.version = 0.5.9`，路径 `/api/pivot-query`；schema `PivotQueryRequest` / `PivotQueryResponse` / `PivotRow` / `WeekInfo`；`PivotQueryRequest` 新增字段 `query_diff: bool = true`，仅 `pivot_type='demand'` 生效）
+> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.9，含 §11 Demand+Supply 计算规则 / §12 Demand 跨版本 diff 过滤）
+> 前端实现版本：v0.5.9
 > 页面入口：
 > - Hub：`views/WeeklyDemandHub.vue`（路由 `/dsp-uploads`；含 4 张功能卡片）
 > - 上传：`views/DspUpload.vue`（路由 `/dsp-uploads/upload`）
@@ -23,6 +23,14 @@
 > 3. **负数 quantity 视觉强调**：仅 `TTL_GAP` / `Rolling_TTLGAP` 行单元格 `< 0` 时使用 `cell-negative`（加粗 + 红色 `#f56c6c`），其余 `data_type` 与 `Demand` 行为完全一致（零值灰、非零加粗深色）。
 > 4. **整行底色压制**：`el-table` hover 高亮需被 `:row-class-name` 注入的 css `!important` 压住。
 > 5. 测试计划 / 验证清单 / 修订记录同步更新（详见各章节）。
+>
+> **v0.5.9 前端侧变更**（摘要）：
+> 1. **新增「仅显示有变化的日期」复选框**：第 2 行 pivot_type radio 行同列右侧（demand 模式可见，dps 模式隐藏）；默认勾选；切换时清 `result` + `lastQueryRequest`，与 `pivot_type` 切换语义一致。
+> 2. **空 `period_columns` 独立提示**：勾选 + 多版本 + 全部日期跨版本全等时 → 结果卡顶部出现黄色 `el-alert`「未匹配到「仅显示有变化的日期」条件」（区别 baseline 的「无匹配数据」）。
+> 3. **空 cell 渲染为 `—`**：`query_diff=true` 过滤后某业务组在某日保留集外时，该 cell 不再显示 0，改显示半角破折号 `—`，配合 `cell-dash` class（灰色 + 正常字重），与 baseline 0 区分「无」与「0」语义。
+> 4. **buildRequest 携带 `query_diff`**：demand 模式透传 `form.query_diff`；dps 模式强制 `query_diff=false`（后端 no-op，但前端语义清晰）；`lastQueryRequest` 快照同步携带 → 导出 Excel 端点收到完整 query_diff。
+> 5. **onReset 同步重置 `query_diff=true`**：避免上次会话遗留关闭状态影响下次查询。
+> 6. 测试计划 / 验证清单 / 修订记录同步更新（详见 §2.11.5 / §5.7 / §7 / §8）。
 >
 > **v0.5.6 前端侧变更**（摘要）：
 >
@@ -609,6 +617,132 @@ function getCellClass(row, periodDate) {
 
 > **Demand/Supply 与 TTL_GAP/Rolling 的非负值显示完全一致**（即沿用原 `nonzero-cell` / `zero-cell` 风格），保证视觉一致性与原 spec §5.4 颜色 token 不冲突。
 
+#### 2.11.5 跨版本 diff 过滤（v0.5.9 新增）
+
+目的：当用户同时选 ≥ 2 个 version_date 时，把「跨版本 quantity 完全相同」的日期剪除，仅保留有差异的日期；聚焦差异点（详见后端 spec §12）。
+
+##### 2.11.5.1 复选框（仅 demand 模式可见）
+
+| 位置 | 元素 | 行为 |
+|---|---|---|
+| 第 2 行（pivot_type radio 行）同列右侧加一个新 `el-form-item` 容器，内含 `<el-checkbox>` | `<el-checkbox v-model="form.query_diff" class="diff-checkbox">仅显示各版本之间有变化的日期</el-checkbox>` | 默认勾选；`v-if="form.pivot_type === 'demand'"`，切到 dps 时整块隐藏（避免误触发且与后端不接通语义对齐）|
+| 切换 query_diff | `watch(() => form.query_diff, ...)` → 清 `result = null` + `lastQueryRequest = null` | 与 `pivot_type` 切换同语义——避免展示过期透视表 |
+| 初始 onReset | `form.query_diff = true` | 恢复默认，与「重置」语义一致 |
+
+> tooltip 由 Element Plus 默认提供 hover-tooltip。说明性 `show-message`（如需）由 v-if 块外的 1 行灰色小字承担，详见 v0.5.9 实施时的具体样式选择。
+
+##### 2.11.5.2 buildRequest 构造
+
+```js
+function buildRequest() {
+  const versionDates = form.pivot_type === 'demand_plus_supply'
+    ? (form.version_date_single ? [form.version_date_single] : [])
+    : form.version_dates.slice()
+  const req = {
+    pivot_type: form.pivot_type,
+    vendor: form.vendor,
+    item: form.item,
+    sub_item: form.sub_item,
+    version_dates: versionDates,
+    expand_to_daily: form.date_granularity === 'day',
+    // v0.5.9 新增：dps 模式强制 false（前端的本字段守卫，与后端 _apply_diff_filter 守门人冗余）
+    query_diff: form.pivot_type === 'demand' && form.query_diff,
+  }
+  // ... 业务行级联字段照旧
+  return req
+}
+```
+
+##### 2.11.5.3 空 `period_columns` 独立提示
+
+仅当满足以下**全部**条件时显示：
+
+- `result` 非空（已成功查询过）；
+- `form.pivot_type === 'demand'`（dps 模式不显示）；
+- `form.query_diff === true`（用户主动启用）；
+- `result.period_columns.length === 0`（全部日期被剪除）；
+- `result.total_rows > 0`（说明业务组仍存在，仅是无差异日期）。
+
+```vue
+<el-alert
+  v-if="result && form.query_diff && form.pivot_type === 'demand'
+        && result.period_columns.length === 0 && result.total_rows > 0"
+  class="diff-empty-alert"
+  type="warning"
+  :closable="false"
+  show-icon
+  title="未匹配到「仅显示有变化的日期」条件"
+  description="勾选的版本日期之间在所选筛选条件下没有差异。可取消勾选查看完整数据。"
+/>
+```
+
+放在 `<el-table>` 之上、结果卡内容区开头。**区别于 baseline 的「该筛选条件下无匹配数据」**（后者仅在 `total_rows === 0` 时显示）。
+
+##### 2.11.5.4 空 cell 渲染为 `—`
+
+`query_diff=true` 多业务组场景下，部分业务组保留集差异日期 ≠ 全集 → 其它 row_group.quantities 不含该 key。需求：是「本业务组没该日期」≠「该日为 0」。
+
+| data_type / context | cellQty 输出 | getCellClass |
+|---|---|---|
+| 沿用 v0.5.7：`cellQty` 返回 number，缺失默认 0 | `0` 或实际数字 | `zero-cell` / `nonzero-cell` |
+| **v0.5.9 修订**：`quantities[pd]` 为 undefined → 返回 `—`（半角破折号，diff 模式仅此分支触发）| `'—'` | `cell-dash`（新 class，灰色 + 正常字重） |
+
+> **向后兼容**：`cellQty(row, pd)` 沿用既有签名（返回 number），新独立 helper `formatCellQty(row, pd)` 返回 `number | '—'`；模板 `<template #default>` 用 `formatCellQty` 而非 `cellQty`。
+>
+> **dps 模式不受影响**：dps 路径里每个 period_date 必有 quantity（Demand / Supply / TTL_GAP / Rolling 4 行的 `cellQty` 都会命中）；`formatCellQty` 仍可能返回 undefined 的唯一路径就是 demand + query_diff=true 的 multi-period_data 全等剪除场景。
+
+```js
+// 新 helper
+function formatCellQty(row, periodDate) {
+  const v = row.quantities ? row.quantities[periodDate] : undefined
+  return typeof v === 'number' ? v : '—'
+}
+
+// getCellClass 改动
+function getCellClass(row, periodDate) {
+  const v = row.quantities ? row.quantities[periodDate] : undefined
+  if (v === undefined) return 'cell-dash'   // v0.5.9 新增
+  if (row.data_type !== 'TTL_GAP' && row.data_type !== 'Rolling_TTLGAP') {
+    return v === 0 ? 'zero-cell' : 'nonzero-cell'
+  }
+  return v < 0 ? 'cell-negative' : (v === 0 ? 'zero-cell' : 'nonzero-cell')
+}
+```
+
+```vue
+<template #default="slotProps">
+  <span :class="slotProps ? getCellClass(slotProps.row, pd) : 'zero-cell'">
+    {{ slotProps ? formatCellQty(slotProps.row, pd) : '—' }}
+  </span>
+</template>
+```
+
+```css
+/* v0.5.9 新增：cell-dash 表示"本业务组无该日期"（区别 zero 表示"该日为 0"）*/
+.cell-dash {
+  color: #c0c4cc;
+  font-weight: normal;
+}
+```
+
+##### 2.11.5.5 结果卡 header「Diff 已过滤」tag
+
+`query_diff=true` + demand 模式 + 已成功查询后，结果卡 header 在既有 4 个 tag 后追加 1 个：
+
+```vue
+<el-tag
+  v-if="form.query_diff && form.pivot_type === 'demand'"
+  size="small"
+  type="success"
+>Diff 已过滤</el-tag>
+```
+
+切到 dps 或关掉复选框再查 → 该 tag 不显示。
+
+##### 2.11.5.6 与 v0.5.8 Excel 导出协同
+
+`lastQueryRequest` 快照中已包含 `query_diff` 字段（见 §2.11.5.2 buildRequest 同步），故 `exportPivot(lastQueryRequest.value)` 自动传递 query_diff → 后端导出 xlsx 的 `period_columns` 同步变短；与 UI 表格 1:1 对齐。**前端零新增改动**。
+
 #### 按钮状态
 
 | 场景 | 「查询」 | 「重置」 |
@@ -633,6 +767,7 @@ function getCellClass(row, periodDate) {
 | 422 | 后端 detail「sheet 'DSP' not found」/ 必填字段缺失 | `ElMessage.error` |
 | 422 | 透视查询：Pydantic 级联校验失败 / 笛卡尔积预检超出 MAX_CARTESIAN(50000) | `showApiError(err)` → `ElMessage.error(detail)` |
 | 422 | **v0.5.7 透视查询**：`pivot_type='demand_plus_supply'` 时 `version_dates` 超过 1 个 | `showApiError(err)` 沿用；前端用 §2.11.2 预先 UI 引导避免触发 |
+| 200 | **v0.5.9 透视查询**：`query_diff=true` + 多版本 + 全部日期跨版本全等 → `period_columns=[]` 200 OK + `row_groups` 仍非空 | 顶部独立 `el-alert`「未匹配到「仅显示有变化的日期」条件」（见 §2.11.5.3）|
 | 500 | 透视查询：SQLAlchemy 异常（如 week_dt 表不存在） | `showApiError(err)` → `ElMessage.error(detail)` |
 | 5xx | 拦截器兜底 | `ElMessage.error('服务异常，请稍后重试')` |
 | 网络 | 拦截器兜底 | `ElMessage.error('网络异常，请稍后重试')` |
@@ -667,6 +802,9 @@ function getCellClass(row, periodDate) {
 | 透视查询 — 级联提示（无时间维度） | 「请至少选择一个时间维度（years / months / weeks）」 |
 | **v0.5.7 透视查询** — 切换到 Demand+Supply 模式 | 「已切换到 Demand+Supply 模式」 |
 | **v0.5.7 透视查询** — 切换回 Demand 模式 | 「已切换到 Demand 模式」 |
+| **v0.5.9 透视查询** — 结果卡 header tag | 「Diff 已过滤」 |
+| **v0.5.9 透视查询** — 空 period_columns 独立 alert 标题 | 「未匹配到「仅显示有变化的日期」条件」 |
+| **v0.5.9 透视查询** — 空 period_columns 独立 alert 描述 | 「勾选的版本日期之间在所选筛选条件下没有差异。可取消勾选查看完整数据。」 |
 
 ---
 
@@ -778,6 +916,30 @@ function getCellClass(row, periodDate) {
 | **v0.5.7.2 修订**：3 条 `background-color` 规则必须在 `:deep()` 选择器块内（防止 v0.5.7 漏写 `:deep()` 导致 scoped 规则失效的回归）| 静态扫描 `PivotQuery.vue` 源文件：每条 `#fdf6ec / #fef0f0 / #ecf5ff !important` 规则对应的选择器必须以 `:deep(` 包裹子组件部分 |
 | **v0.5.7.3 修订**：`data_type` 列宽 = 140（防止回到旧值 90 导致 `Rolling_TTLGAP` 被截断）| 静态扫描 `PivotQuery.vue`：`prop: 'data_type'` 行 80 字符内必须出现 `width: 140`；`data_type` 行不得出现 `width: 90` |
 
+### 5.7 View `views/PivotQuery.vue`（v0.5.9 新增 §2.11.5 配套测试）
+
+| 用例 | 期望 |
+|------|------|
+| form 默认 `query_diff = true` | DOM 初始 state 中 `vm.form.query_diff === true` |
+| demand 模式显示 checkbox | `wrapper.find('.diff-checkbox').exists() === true` |
+| dps 模式隐藏 checkbox | `vm.form.pivot_type = 'demand_plus_supply'` → `wrapper.find('.diff-checkbox').exists() === false` |
+| toggle query_diff → result + lastQueryRequest 清空 | 模拟成功查询后切 `query_diff` → `vm.result === null && vm.lastQueryRequest === null` |
+| onReset 还原 `query_diff = true` | 改 `query_diff = false` → `onReset()` → `vm.form.query_diff === true` |
+| buildRequest 携带 `query_diff: true` | demand 模式默认 → `vm.buildRequest().query_diff === true` |
+| buildRequest 携带 `query_diff: false` | `vm.form.query_diff = false` → `vm.buildRequest().query_diff === false` |
+| buildRequest dps 模式强制 `query_diff: false` | dps + `vm.form.query_diff = true` → `vm.buildRequest().query_diff === false` |
+| 空 `period_columns` + `query_diff=true` + demand + `total_rows > 0` → 显示独立 alert | `wrapper.find('.diff-empty-alert').exists() === true`；文案含「未匹配到」|
+| 空 `period_columns` + `query_diff=false` → 不显示独立 alert | `wrapper.find('.diff-empty-alert').exists() === false` |
+| 空 `period_columns` + dps 模式（无论 `query_diff`）→ 不显示独立 alert | dps + `query_diff=true` + period_columns=[] → `wrapper.find('.diff-empty-alert').exists() === false` |
+| 空 `period_columns` + `total_rows === 0` → 不显示独立 alert（沿用 baseline「无匹配数据」） | total=0 + period_columns=0 → `.diff-empty-alert` 不存在；`.empty-hint` 存在 |
+| 单版本（`len=1`）即使 `query_diff=true` 仍走 baseline | `version_dates=[v1]` → 后端 no-op；响应 `period_columns` 全保留 |
+| `formatCellQty` helper：`quantities[pd]===undefined` 返回 `'—'` | `vm.formatCellQty(row, '2026-07-06') === '—'`（缺该 key）|
+| `getCellClass` 对缺失 quantity 返回 `cell-dash` | `vm.getCellClass(row, '2026-07-06') === 'cell-dash'`（缺该 key） |
+| `formatCellQty` 正常路径不返回 `'—'`（dps 路径全价齐） | dps row 必有 4 类 quantity → `formatCellQty` 全部返回 number |
+| 切到 dps 前结果卡的「Diff 已过滤」tag 存在；切到 dps 后消失 | demand + query_diff=true 查询 → tag 存在；dps + query_diff=true 查询 → tag 不存在 |
+| 取消勾选后再查询，tag 消失 | `query_diff=false` + demand + 查 → 结果卡 header 不含「Diff 已过滤」|
+| onExport 沿用 `lastQueryRequest.query_diff` | 改 `form.query_diff` 但不动 `lastQueryRequest` → `exportPivot` 收到的 `req.query_diff` 等于快照里的值（验证 lastQueryRequest 隔离）|
+
 ---
 
 ## 6. 不实现的组件（明确范围）
@@ -793,6 +955,11 @@ function getCellClass(row, periodDate) {
 - **v0.5.6 / v0.5.7**：透视查询不实现结果分页（单次返回全部数据，硬上限通过笛卡尔积预检保证）；
 - **v0.5.6 / v0.5.7**：透视查询不实现跨版本 quantity 合并（每个 version_date 独立成行）；
 - **v0.5.7**：透视查询行级底色**不**随主题切换——硬编码 3 个十六进制色（`#ecf5ff` / `#fdf6ec` / `#fef0f0`）而非 `var(--el-color-*)`，避免 Element Plus 主题包变量未公开导致样式漂移；如未来切主题，需在 `<style>` 中改 token。
+- **v0.5.9**：透视查询**不**做 delta 计算——quantity 保留原值（不输出 difference 字段），差异标记靠「是否出现」区分；
+- **v0.5.9**：透视查询**不**在 dps 模式接通 `query_diff`——checkbox 隐藏 + `buildRequest` 强制 false（后端也 no-op）；
+- **v0.5.9**：透视查询**不**为「无差异日期」另加任何视觉标（如灰底）——空 cell 用 `—` 一致表达「本业务组无该日期」；
+- **v0.5.9**：透视查询**不**在结果卡 header 加「query_diff 模式切换」按钮——控件放在筛选区，复选框即可；
+- **v0.5.9**：透视查询**不**做悬停即时切换 query_diff 模式（每次切换都要求点「查询」重新打）——避免「看到一半」的中间态。
 
 ---
 
@@ -837,6 +1004,13 @@ function getCellClass(row, periodDate) {
 - [x] **v0.5.7**：Rolling_TTLGAP 负数量 cell class 含 `cell-negative`
 - [x] **v0.5.7**：Demand / Supply 行非负 cell class 仅 `zero-cell` / `nonzero-cell`（无 `cell-negative`）
 - [x] **v0.5.7.3 修订**：npm run dev → 打开 `/pivot-query` → 切到 `pivot_type='demand_plus_supply'` → 查 → 肉眼确认 `Data Type` 列中 `Rolling_TTLGAP` header 与 cell 完整显示（不被 `...` 截断，需手动烟雾测试）
+- [x] **v0.5.9**：npm test 全绿（vitest 包含 17 条 §5.7 新增测试）
+- [x] **v0.5.9**：npm run dev → 打开 `/pivot-query` → 选 2 个 vendor 相同的版本日期 → 默认勾选「仅显示有变化的日期」→ 查 → 结果卡 header 出现「Diff 已过滤」绿色 tag；肉眼确认 `period_columns` 仅显示有差异的日期
+- [x] **v0.5.9**：构造 2 个版本 + 3 个日期（中间日有差异，另两日全等） → 查 → `period_columns` 仅 1 列；含空 cell 的 row_group 显示 `—`（不是 0）
+- [x] **v0.5.9**：构造完全全等版本（多日期完全相同） → 查 → 顶部黄色 `el-alert`「未匹配到「仅显示有变化的日期」条件」独立提示出现；同时 baseline 「无匹配数据」**不**显示（区别于 baseline 行为）
+- [x] **v0.5.9**：取消勾选「仅显示有变化的日期」 → 重新查 → `period_columns` 完整；alert 不显示；tag 不显示
+- [x] **v0.5.9**：切到 `pivot_type='demand_plus_supply'` → 复选框整块消失；重新查 → 结果卡 header **不**含「Diff 已过滤」tag；`buildRequest` 携带的 `query_diff=false`（即使 form 中为 true）
+- [x] **v0.5.9**：点「导出 Excel」 → 实际下载的 xlsx 中 sheet 1 的列数 = UI 表格 `period_columns.length`（diff 过滤生效，snapshot 传递 query_diff 成功）
 
 ---
 
@@ -859,6 +1033,17 @@ function getCellClass(row, periodDate) {
 | **v0.5.6** | 头部 / §1.1 / §1.4 / §2.11 / §3 / §4 / §5 / §6 / §7 / §8 | **新增透视查询子模块**：路由 `/pivot-query`；`PivotQuery.vue` + `api/pivot_query.js`；Hub 卡片从 3→4 张；错误码/状态文案/测试计划/不实现组件/验证清单同步更新 |
 | v0.5.6 | §2.11 | 透视查询完整功能点：三组筛选（必填定位 + 业务行级联 + 时间维度）+ 透视表渲染 + 级联提示 + 重置 |
 | v0.5.6 | §5.5 / §5.6 | 新增 API 层 + View 层测试计划（覆盖级联、buildRequest、cellQty、onQuery、onReset、loadWeeks） |
+| **v0.5.9** | 头部 / §摘要 / §2.11.5 / §3 / §4 / §5.7 / §6 / §7 / §8 | **Demand 跨版本 diff 过滤前端接入**：筛选区新增「仅显示有变化的日期」复选框（demand 模式可见，dps 模式隐藏）；空 `period_columns` 独立 alert 文案；空 cell 渲染为 `—` 配 `cell-dash` class；buildRequest 携带 `query_diff` 字段（dps 强制 false）；onExport 沿用 lastQueryRequest 快照；onReset 还原 `query_diff=true`；新增 17+ 个测试用例；OpenAPI 自动同步 `PivotQueryRequest.query_diff` |
+| v0.5.9 | §2.11.5.1 | 复选框 UI 位置 + 切模式清 result + onReset 还原 |
+| v0.5.9 | §2.11.5.2 | buildRequest 携带 query_diff，dps 模式强制 false |
+| v0.5.9 | §2.11.5.3 | 空 period_columns 独立 alert（区别 baseline「无匹配数据」）|
+| v0.5.9 | §2.11.5.4 | `formatCellQty` 缺失 quantity 返回 `'—'`；`getCellClass` 返回 `'cell-dash'` |
+| v0.5.9 | §2.11.5.5 | 结果卡 header 动态「Diff 已过滤」tag |
+| v0.5.9 | §2.11.5.6 | onExport 沿用 lastQueryRequest 的 query_diff（无需新增改动）|
+| v0.5.9 | §3 | 加 1 行：200 + period_columns=[] 走独立 alert 而非 baseline |
+| v0.5.9 | §4 | 加 3 行文案（Diff 已过滤 tag / 未匹配到 alert 标题 / 描述）|
+| v0.5.9 | §5.7 | 新增 17 个测试用例（覆盖 form 默认值 / visibility / 切换清空 / onReset / buildRequest 三态 / alert 四分支 / cell '—' / tag 动态 / onExport 快照隔离）|
+| v0.5.9 | §6 | 加 5 项明确范围（不做 delta / 不接 dps / 不加底色 / 不加按钮切换 / 不做 hover 即时切换）|
 | **v0.5.4** | 头部 / §1.1 / §1.2 / §1.4 / §2 / §3 / §5 / §6 / §7 / §8 | **模块重命名**：DSP 上传 → 周需求管理；新增 Hub + 查询 + 删除子功能；spec 文件 `dsp_upload.md` → `weekly_demand.md` |
 | v0.5.4 | §2.8 | Hub 页功能点（3 张卡片导航） |
 | v0.5.4 | §2.9 | 查询页功能点（4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览） |

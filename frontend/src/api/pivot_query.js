@@ -1,5 +1,5 @@
 /**
- * 透视查询 API（v0.5.6）：对接后端 /api/pivot-query 路由。
+ * 透视查询 API（v0.5.9）：对接后端 /api/pivot-query 路由。
  *
  * 调用 `POST /api/pivot-query`，请求体为 `PivotQueryRequest`，
  * 响应为 `PivotQueryResponse`（含 period_columns / row_groups / total_rows / version_dates / date_granularity）。
@@ -11,6 +11,9 @@
  * - countries / categories / config_codes / config_names: 可选，严格级联
  * - years / months / weeks: 可选，至少传一个；级联
  * - expand_to_daily: bool（默认 false 按周，true 按日）
+ * - query_diff: bool = true（v0.5.9 新增；仅 `pivot_type='demand'` 生效；多版本时若某
+ *   period_date 各版本 quantity 全等则该日期从 `period_columns` / 各 `quantities`
+ *   中剪除；`len(version_dates) <= 1` 由后端内部 no-op）
  *
  * 错误处理：抛 ApiError（client.js 拦截器）。
  */
@@ -42,9 +45,11 @@ export function queryPivot(req) {
 
 
 /**
- * 透视查询结果导出 .xlsx（v0.5.8 新增）。
+ * 透视查询结果导出 .xlsx（v0.5.8 新增；v0.5.9 同步 query_diff）。
  *
  * Body 与 queryPivot 完全相同；后端会再次执行 query_pivot + 笛卡尔积预检 + xlsx 构造。
+ * v0.5.9 起 `req.query_diff` 字段也会传递给后端的 `_apply_diff_filter`，
+ * 故导出 xlsx 中 sheet 1 的列数与 UI 表格 `period_columns` 1:1 对齐（diff 过滤生效）。
  *
  * @param {object} req PivotQueryRequest（**必须是上次成功查询的请求快照**，否则结果与 UI 展示不一致）
  * @returns {Promise<Blob>} xlsx 二进制（包含 sheet 1「透视结果」+ sheet 2「查询参数快照」）

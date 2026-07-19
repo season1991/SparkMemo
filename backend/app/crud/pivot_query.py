@@ -1,6 +1,6 @@
-"""透视查询 CRUD（v0.5.7）。
+"""透视查询 CRUD（v0.5.9）。
 
-设计要点（与 spec §透视查询 / §11 Demand+Supply 计算规则 对齐）：
+设计要点（与 spec §透视查询 / §11 Demand+Supply 计算规则 / §12 Demand 跨版本 diff 过滤 对齐）：
 1. 三子查询拼接：横向（dsp_uploads × dsp_upload_rows 业务行去重）× 纵向（week_dt）× 交叉点（dsp_upload_rows 明细 quantity）。
 2. 共享 CTE：b 与 d 子查询都从同一个 `base_rows` CTE 中取，**只扫描一次 dsp_upload_rows**。
 3. 笛卡尔积在数据库层通过 SQL JOIN 自然展开，无 GROUP BY 即可获得「每行 × 每日期 = 一条记录」。
@@ -10,6 +10,11 @@
    - `base_rows` CTE 过滤改为 `data_type IN ('Demand', 'Supply')`
    - b 子查询 GROUP BY **去掉 data_type**，让 Demand / Supply 配对到同一业务组
    - d 子查询保留 data_type 字段，Python 层按 §11.3 七步计算 Demand / Supply / TTL_GAP / Rolling_TTLGAP 四行/组
+7. v0.5.9 新增 `_apply_diff_filter`：仅 `pivot_type='demand'` 末尾接通，
+   按业务维度 key（country / category / config_code / config_name / data_type / ttl）
+   聚合 `row_groups`，对每个业务组求「跨 version_date 的 quantity 全等日期集合」并从
+   `period_columns` 与各 `quantities` 中剪除；`len(version_dates) <= 1` 直接 no-op。
+   SQL 主路径不变；`demand_plus_supply` 不接通。
 
 不抛 4xx HTTPException；业务异常（如 week_dt 表不存在）由调用方按场景映射。
 """
@@ -26,6 +31,81 @@ from app.schemas import PivotQueryRequest, PivotQueryResponse, PivotRow
 
 # 笛卡尔积硬上限：超出 → 422 拒绝执行
 MAX_CARTESIAN = 50000
+
+# 跨版本 diff 过滤用的业务维度 group key（v0.5.9）。
+# 注：与 §11.3 步骤 1 不同——这里保留 ttl 作为「不同 ttl = 不同业务组」语义，
+# 因为 diff 过滤关注的是「跨版本 quantity 是否完全一致」，ttl 不同的两组本来数量级不同，
+# 必须隔离比较；TTL_GAP / Rolling_TTLGAP 行则在 §11 自己的 group_key（去 ttl）下合并。
+_QUERY_DIFF_BIZ_KEY: tuple[str, ...] = (
+    "country",
+    "category",
+    "config_code",
+    "config_name",
+    "data_type",
+    "ttl",
+)
+
+
+def _apply_diff_filter(
+    resp: PivotQueryResponse,
+    version_dates_len: int,
+) -> PivotQueryResponse:
+    """Demand 跨版本 diff 过滤（v0.5.9）。
+
+    纯函数；仅在 `_query_demand` 末尾调用，`_query_demand_plus_supply` 不接通。
+
+    对每个业务维度组（按 `_QUERY_DIFF_BIZ_KEY` 6 字段聚合，跨多个 version_date）：
+        对该组所有版本在每个 period_date 上的 quantity 取集合；
+        集合大小 == 1 → 该日期「跨版本全等」，从所有 row_group.quantities 中剪除；
+        集合大小 >= 2 → 「有差异」，该日期进入保留集，quantity 保留**原值**（不计算 delta）。
+
+    最后 `period_columns` 取所有业务组保留集的并集（按字典序升序）。
+    过滤后某 row_group.quantities 为空 → 仍保留该 row_group（诊断语义）。
+
+    入参 `version_dates_len <= 1` 时直接 no-op：
+        单版本没有可比对象，沿用 baseline；与 req.query_diff 配置无关。
+
+    见 spec `backend/spec/weekly_demand.md` §12 Demand 跨版本 diff 过滤。
+    """
+    if version_dates_len <= 1:
+        return resp
+
+    # 1. 按业务维度聚合 row_groups（跨多个 version_date 的同名业务组）
+    groups: dict[tuple, list[PivotRow]] = {}
+    for r in resp.row_groups:
+        key = tuple(getattr(r, k) for k in _QUERY_DIFF_BIZ_KEY)
+        groups.setdefault(key, []).append(r)
+
+    # 2. 计算每个业务组的保留日期集合 + 缩窄 row_group.quantities
+    new_rows: list[PivotRow] = []
+    global_kept: set[str] = set()
+    for rows in groups.values():
+        all_dates: set[str] = set()
+        for r in rows:
+            all_dates.update(r.quantities.keys())
+
+        kept_for_group: set[str] = {
+            p
+            for p in all_dates
+            if len({r.quantities.get(p, 0) for r in rows}) > 1
+        }
+        global_kept |= kept_for_group
+
+        for r in rows:
+            r.quantities = {
+                p: v for p, v in r.quantities.items() if p in kept_for_group
+            }
+            new_rows.append(r)
+            # 注意：quantities={} 也保留；见 spec §12.5 边界「空 row_group 保留」
+
+    new_period_columns = sorted(global_kept)
+    return PivotQueryResponse(
+        period_columns=new_period_columns,
+        row_groups=new_rows,
+        total_rows=len(new_rows),
+        version_dates=resp.version_dates,
+        date_granularity=resp.date_granularity,
+    )
 
 
 def _build_base_rows_filters(req: PivotQueryRequest) -> list:
@@ -308,13 +388,18 @@ def _query_demand(db: Session, req: PivotQueryRequest) -> PivotQueryResponse:
     period_columns = sorted(period_columns_set)
     row_groups = [PivotRow(**entry) for entry in row_groups_map.values()]
 
-    return PivotQueryResponse(
+    resp = PivotQueryResponse(
         period_columns=period_columns,
         row_groups=row_groups,
         total_rows=len(row_groups),
         version_dates=list(req.version_dates),
         date_granularity="day" if req.expand_to_daily else "week",
     )
+
+    if req.query_diff:
+        resp = _apply_diff_filter(resp, len(req.version_dates))
+
+    return resp
 
 
 def _query_demand_plus_supply(

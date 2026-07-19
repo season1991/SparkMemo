@@ -1,10 +1,11 @@
 <script setup>
 /**
- * 透视查询页（路由 /pivot-query，v0.5.6）。
+ * 透视查询页（路由 /pivot-query，v0.5.9）——
  *
  * 三组筛选 + 一张透视表：
  * 1. 必填定位：vendor + item + sub_item（级联下拉，复用 dsp_uploads.js）+ version_dates（多选）
- * 2. pivot_type（v0.5.6 固定 demand）+ 日期粒度（按周 / 按日）
+ * 2. pivot_type（v0.5.6 固定 demand，v0.5.7 启用 demand_plus_supply）+ 日期粒度（按周 / 按日）
+ *    + v0.5.9 新增：「仅显示有变化的日期」复选框（demand 模式可见，dps 模式隐藏）
  * 3. 业务行筛选：countries / categories / config_names 三级级联（从 lookup API 拉）
  * 4. 时间维度筛选：years（日期控件）+ months（1-12 下拉）+ weeks（根据 years+months 联动）
  *
@@ -14,6 +15,12 @@
  *   - 选择 category → 重新拉 config_name（仅显示该 country+category 下有的）
  *   - 选择 years + months → 拉 weeks-of-month 计算可选的 ISO 周编号
  *   - 点击「查询」→ POST /api/pivot-query → 渲染 row_groups × period_columns 透视表
+ *
+ * v0.5.9 demand 模式新增：
+ *   - `form.query_diff = true`（默认）勾选后向后端传 `query_diff: true`；
+ *     跨版本 quantity 完全相同的日期从 period_columns / 各 row_group.quantities 中剪除
+ *   - 空 period_columns 走独立 alert（区别 baseline 「无匹配数据」）
+ *   - 空 cell 渲染为 '—'（formatCellQty helper），区别 0 与「本业务组无该日期」
  *
  * 错误沿用 client.showApiError(err)；Pydantic 级联校验失败由 422 错误消息展示给用户。
  */
@@ -82,7 +89,10 @@ const form = reactive({
   // 时间维度
   years: String(new Date().getFullYear()),  // ISO 年（string，单选）
   months: [],  // 自然月 1-12（number[]）
-  weeks: []    // ISO 周编号（number[]）
+  weeks: [],   // ISO 周编号（number[]）
+  // v0.5.9 新增：跨版本 diff 过滤开关；默认 true；仅 demand 模式生效
+  // 后端 _apply_diff_filter 对 len(version_dates)<=1 自动 no-op，无需前端判定
+  query_diff: true
 })
 
 const querying = ref(false)
@@ -461,6 +471,7 @@ function onDateGranularityChange() {
 
 function buildRequest() {
   // v0.5.7：version_dates 按 pivot_type 从不同字段构造
+  // v0.5.9：dps 模式强制 query_diff=false（前端冗余守卫；后端 _apply_diff_filter 也会忽略）
   const versionDates =
     form.pivot_type === 'demand_plus_supply'
       ? (form.version_date_single ? [form.version_date_single] : [])
@@ -471,7 +482,9 @@ function buildRequest() {
     item: form.item,
     sub_item: form.sub_item,
     version_dates: versionDates,
-    expand_to_daily: form.date_granularity === 'day'
+    expand_to_daily: form.date_granularity === 'day',
+    // v0.5.9 新增：仅 demand 模式生效；dps 模式前端强制 false（后端 no-op，语义清晰）
+    query_diff: form.pivot_type === 'demand' && form.query_diff
   }
   if (form.countries.length > 0) req.countries = form.countries.slice()
   if (form.categories.length > 0) req.categories = form.categories.slice()
@@ -544,6 +557,8 @@ function onReset() {
   form.years = String(new Date().getFullYear())
   form.months = []
   form.weeks = []
+  // v0.5.9 新增：随重置一起还原到默认（开启 diff 过滤）
+  form.query_diff = true
   itemOptions.value = []
   subItemOptions.value = []
   versionDateOptions.value = []
@@ -564,6 +579,13 @@ function cellQty(row, periodDate) {
   return typeof v === 'number' ? v : 0
 }
 
+// v0.5.9 新增：cell 渲染文本。缺失 quantity 时返回 '—'（区别 0 语义，
+// 仅 query_diff=true 过滤后的多业务组场景会触发）。其它路径与 cellQty 一致。
+function formatCellQty(row, periodDate) {
+  const v = row.quantities ? row.quantities[periodDate] : undefined
+  return typeof v === 'number' ? v : '—'
+}
+
 // v0.5.7 新增：行级 class — 让用户一眼识别 4 行/组（Demand/Supply / TTL_GAP / Rolling_TTLGAP）
 // Demand 与 Supply 共用一类（原始数据组，强调"配对"语义）
 function getRowClass({ row }) {
@@ -574,15 +596,14 @@ function getRowClass({ row }) {
 }
 
 // v0.5.7 新增：cell class — 仅 TTL_GAP / Rolling_TTLGAP 行的负数量触发红色加粗
+// v0.5.9 修订：缺失 quantity 返回 'cell-dash'（与 zero-cell 区分语义）
 function getCellClass(row, periodDate) {
-  const v = cellQty(row, periodDate)
-  if (
-    v < 0 &&
-    (row.data_type === 'TTL_GAP' || row.data_type === 'Rolling_TTLGAP')
-  ) {
-    return 'cell-negative'
+  const v = row.quantities ? row.quantities[periodDate] : undefined
+  if (v === undefined) return 'cell-dash'   // v0.5.9 新增
+  if (row.data_type !== 'TTL_GAP' && row.data_type !== 'Rolling_TTLGAP') {
+    return v === 0 ? 'zero-cell' : 'nonzero-cell'
   }
-  return v === 0 ? 'zero-cell' : 'nonzero-cell'
+  return v < 0 ? 'cell-negative' : (v === 0 ? 'zero-cell' : 'nonzero-cell')
 }
 
 // ==================== pivot_type 切换（v0.5.7 新增） ====================
@@ -613,6 +634,13 @@ function onPivotTypeChange(newType, oldType) {
 }
 
 watch(() => form.pivot_type, onPivotTypeChange)
+
+// v0.5.9 新增：切换 query_diff 也要清 result + lastQueryRequest，
+// 与 pivot_type 切换同语义——避免展示"过滤范围不一致"的过期透视表
+watch(() => form.query_diff, () => {
+  result.value = null
+  lastQueryRequest.value = null
+})
 
 // ==================== 初始化 ====================
 
@@ -718,6 +746,17 @@ onMounted(() => {
               <el-radio-button value="week">按周</el-radio-button>
               <el-radio-button value="day">按日</el-radio-button>
             </el-radio-group>
+          </el-form-item>
+
+          <!-- v0.5.9 新增：跨版本 diff 过滤复选框；仅 demand 模式可见 -->
+          <el-form-item
+            v-if="form.pivot_type === 'demand'"
+            label="&nbsp;"
+            class="form-cell-narrow diff-checkbox-cell"
+          >
+            <el-checkbox v-model="form.query_diff" class="diff-checkbox">
+              仅显示各版本之间有变化的日期
+            </el-checkbox>
           </el-form-item>
         </div>
 
@@ -866,6 +905,12 @@ onMounted(() => {
             <el-tag size="small" type="warning">
               {{ result.date_granularity === 'week' ? '按周' : '按日' }}
             </el-tag>
+            <!-- v0.5.9 新增：勾选 query_diff + demand 模式下显示 Diff 已过滤标记 -->
+            <el-tag
+              v-if="form.query_diff && form.pivot_type === 'demand'"
+              size="small"
+              type="success"
+            >Diff 已过滤</el-tag>
             <!-- v0.5.8 新增：导出 Excel 按钮 -->
             <el-button
               size="small"
@@ -882,6 +927,18 @@ onMounted(() => {
       <div v-if="result.total_rows === 0" class="empty-hint">
         该筛选条件下无匹配数据。请缩小筛选范围或选择其他时间维度。
       </div>
+
+      <!-- v0.5.9 新增：query_diff 过滤后无差异日期的独立提示（区别 baseline "无匹配数据"） -->
+      <el-alert
+        v-else-if="form.query_diff && form.pivot_type === 'demand'
+                   && result.period_columns.length === 0"
+        class="diff-empty-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="未匹配到「仅显示有变化的日期」条件"
+        description="勾选的版本日期之间在所选筛选条件下没有差异。可取消勾选查看完整数据。"
+      />
 
       <div v-else class="pivot-table-wrapper">
         <el-table
@@ -912,8 +969,9 @@ onMounted(() => {
             align="right"
           >
             <template #default="slotProps">
-              <span :class="slotProps ? getCellClass(slotProps.row, pd) : 'zero-cell'">
-                {{ slotProps ? cellQty(slotProps.row, pd) : 0 }}
+              <span :class="slotProps ? getCellClass(slotProps.row, pd) : 'cell-dash'">
+                <!-- v0.5.9 修订：缺失 quantity 渲染为 '—'（区别 baseline 0） -->
+                {{ slotProps ? formatCellQty(slotProps.row, pd) : '—' }}
               </span>
             </template>
           </el-table-column>
@@ -962,6 +1020,20 @@ onMounted(() => {
 .form-cell-narrow {
   flex: 0 0 auto;
   min-width: 240px;
+}
+/* v0.5.9 新增：diff 复选框外框（label 留空，仅为对齐同行高度） */
+.diff-checkbox-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.diff-checkbox-cell :deep(.el-form-item__label) {
+  height: 0;
+  margin: 0;
+}
+/* v0.5.9 新增：diff 过滤独立 alert 内边距 */
+.diff-empty-alert {
+  margin: 8px 0 16px;
 }
 .cascade-hint {
   margin: 8px 0;
@@ -1036,5 +1108,14 @@ onMounted(() => {
 .cell-negative {
   font-weight: 700;
   color: #f56c6c;
+}
+
+/* v0.5.9 新增：cell-dash 表示"本业务组无该日期"（区别 zero-cell 表示"该日为 0"）
+ * 仅 query_diff=true 过滤后的多业务组场景触发；
+ * dps 路径永远命中 quantity 返回 number，故 cell-dash 在 dps 不可见。
+ */
+.cell-dash {
+  color: #c0c4cc;
+  font-weight: normal;
 }
 </style>
