@@ -19,6 +19,7 @@
  */
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import { ApiError, showApiError } from '../api/client.js'
 import {
   getDistinctVendors,
@@ -31,8 +32,10 @@ import {
   lookupCountries,
   lookupCategories,
   lookupConfigNames,
-  lookupWeeksOfMonth
+  lookupWeeksOfMonth,
+  exportPivot
 } from '../api/pivot_query.js'
+import { downloadBlob } from '../utils/downloadBlob.js'
 
 // ==================== 级联下拉数据 ====================
 
@@ -84,6 +87,11 @@ const form = reactive({
 
 const querying = ref(false)
 const result = ref(null)  // PivotQueryResponse
+
+// v0.5.8 新增：Excel 导出相关状态
+const exporting = ref(false)
+// 上次成功查询的请求快照；导出始终用此快照，避免「改了筛选但忘了重查」的隐性不一致
+const lastQueryRequest = ref(null)
 
 // ==================== 计算属性 ====================
 
@@ -486,12 +494,39 @@ async function onQuery() {
     const req = buildRequest()
     const res = await queryPivot(req)
     result.value = res
+    // v0.5.8 新增：快照请求，供「导出 Excel」使用
+    lastQueryRequest.value = req
     ElMessage.success(`查询完成：${res.total_rows} 行 · ${res.period_columns.length} 个日期列`)
   } catch (err) {
     if (err instanceof ApiError) showApiError(err)
     else ElMessage.error(err.message || '查询失败')
   } finally {
     querying.value = false
+  }
+}
+
+// ==================== v0.5.8 Excel 导出 ====================
+
+
+function timestampForFilename() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+async function onExport() {
+  if (!lastQueryRequest.value) return  // 无成功查询结果 → 不响应
+  exporting.value = true
+  try {
+    const blob = await exportPivot(lastQueryRequest.value)
+    const filename = `pivot_${lastQueryRequest.value.pivot_type}_${timestampForFilename()}.xlsx`
+    downloadBlob(blob, filename)
+    ElMessage.success('已开始下载')
+  } catch (err) {
+    if (err instanceof ApiError) showApiError(err)
+    else ElMessage.error(err.message || '导出失败')
+  } finally {
+    exporting.value = false
   }
 }
 
@@ -517,6 +552,8 @@ function onReset() {
   configNameOptions.value = []
   weekOptions.value = []
   result.value = null
+  // v0.5.8 新增：随重置一起清
+  lastQueryRequest.value = null
   loadVendors()
 }
 
@@ -556,6 +593,8 @@ function getCellClass(row, periodDate) {
 function onPivotTypeChange(newType, oldType) {
   // 任何 pivot_type 切换都清空结果（避免展示过期透视表）
   result.value = null
+  // v0.5.8 新增：模式切换隔离 — 同时清空 lastQueryRequest，避免导出旧模式数据
+  lastQueryRequest.value = null
   if (newType === 'demand_plus_supply' && oldType === 'demand') {
     // demand → dps：取数组的第一个作为单值；多余项丢弃（保留至多 1 个）
     form.version_date_single = form.version_dates[0] || ''
@@ -827,6 +866,15 @@ onMounted(() => {
             <el-tag size="small" type="warning">
               {{ result.date_granularity === 'week' ? '按周' : '按日' }}
             </el-tag>
+            <!-- v0.5.8 新增：导出 Excel 按钮 -->
+            <el-button
+              size="small"
+              type="success"
+              :icon="Download"
+              :loading="exporting"
+              :disabled="exporting"
+              @click="onExport"
+            >导出 Excel</el-button>
           </span>
         </div>
       </template>

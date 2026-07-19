@@ -152,3 +152,103 @@
 - [x] 点重置时 store.hasResult 状态下走二次确认
 - [x] `backend/spec/dsp_upload.md` §修订记录 含 v0.5.2
 - [x] `backend/openapi/dsp_uploads.json` 字段 = `ym`（非 `year_month`）+ 4 form fields
+
+---
+
+## v0.5.8（新增 Excel 导出子模块）
+
+> 适配规格：`frontend/spec/weekly_demand.md` §Excel 导出子模块（v0.5.8 新增）
+> 触发范围：仅周需求「查询」子模块 + 透视查询子模块；其它视图不受影响。
+> TDD：严格按 README §5.1「先 RED → 后 GREEN」流程（沿用 v0.5.7 后端阶段的承诺）
+> 库选型：无新依赖；axios `responseType: 'blob'` + 浏览器原生 `<a download>`
+
+### Phase 0 — 规格定稿
+
+- [x] `frontend/spec/weekly_demand.md` §Excel 导出子模块（§1~§11）已写入
+- [x] `frontend/spec/weekly_demand.md` 末尾追加 `v0.5.7 → v0.5.8` 修订记录表
+
+### Phase 1 — Todo List（本文件）
+
+- [x] 在本文件追加 v0.5.8 阶段章节
+
+### Phase 2 — 测试驱动（RED）
+
+> 文件：`frontend/src/utils/__tests__/downloadBlob.test.js` + 既有 `views/__tests__/WeeklyDemand.test.js` + `views/__tests__/PivotQuery.test.js`
+> 目标：9 条新增用例，npm test 期望全部红（ImportError / 函数不存在）
+
+#### 2.1 downloadBlob 工具（1 条）
+
+- [ ] **2.1.1** `downloadBlob` 调用：`URL.createObjectURL` 1 次 + `<a download='test.xlsx'>` + `click()` + `revokeObjectURL`
+
+#### 2.2 WeeklyDemandQuery 视图（4 条）
+
+- [ ] **2.2.1** 初始无 result → header 无「导出 Excel」按钮
+- [ ] **2.2.2** 查询成功 → header 出现「导出 Excel」按钮；:loading=false、:disabled=false
+- [ ] **2.2.3** 点「导出 Excel」→ `downloadDspRowsXlsx(result.id)` 1 次 + `downloadBlob` 1 次 + filename `dsp_upload_{id}_rows_*.xlsx` + toast「已开始下载」
+- [ ] **2.2.4** 422 超限 → `showApiError` 走 422 分支 + toast 含后端 detail
+
+#### 2.3 PivotQuery 视图（4 条）
+
+- [ ] **2.3.1** 初始无 result → header 无「导出 Excel」按钮
+- [ ] **2.3.2** 查询成功 → header 出现「导出 Excel」按钮
+- [ ] **2.3.3** 点「导出 Excel」→ `exportPivot(lastQueryRequest)` 1 次 + `downloadBlob` 1 次 + filename `pivot_{pivot_type}_*.xlsx`
+- [ ] **2.3.4** 用户改 countries 后点导出 → `exportPivot` 收到的仍是上次查询的 countries（验证 lastQueryRequest 隔离）
+
+### Phase 3 — 前端实现（GREEN）
+
+#### 3.1 工具层
+
+- [x] `src/utils/downloadBlob.js` 新建：`downloadBlob(blob, filename)` 用 `URL.createObjectURL` + `<a download>` + `revokeObjectURL`
+
+#### 3.2 API 层
+
+- [x] `src/api/dsp_uploads.js` 新增 `downloadDspRowsXlsx(id)`：GET `/dsp-uploads/{id}/rows/export` + `responseType: 'blob'` + `timeout: 60000`
+- [x] `src/api/pivot_query.js` 新增 `exportPivot(req)`：POST `/pivot-query/export` + body=req + `responseType: 'blob'` + `timeout: 60000`
+
+#### 3.3 View 层
+
+- [x] `src/views/WeeklyDemandQuery.vue` 改造：
+  - import `Download` icon + `downloadDspRowsXlsx` + `downloadBlob`
+  - 加 `exporting` ref
+  - 结果卡 header 加「导出 Excel」按钮（`type="success"` + `Download` icon + `:loading="exporting"`）
+  - 加 `onExport()` + `timestampForFilename()` helper
+- [x] `src/views/PivotQuery.vue` 改造：
+  - import `Download` icon + `exportPivot` + `downloadBlob`
+  - 加 `exporting` ref + `lastQueryRequest` ref
+  - 结果卡 header 加「导出 Excel」按钮（同上模式）
+  - `onQuery()` 成功后写入 `lastQueryRequest = req`
+  - 加 `onExport()`：用 `lastQueryRequest` 调 `exportPivot`
+  - `onReset()` 清 `lastQueryRequest`
+  - `onPivotTypeChange()` 清 `lastQueryRequest`（模式切换隔离）
+
+#### 3.4 测试
+
+- [x] `src/utils/__tests__/downloadBlob.test.js` 新建（1 条）
+- [x] `src/views/__tests__/WeeklyDemand.test.js` 追加 4 条
+- [x] `src/views/__tests__/PivotQuery.test.js` 追加 6 条
+- [x] 跑 `npm test` 期望全绿
+- [x] 跑 `npm test` 全量 131/131 全绿（既有 120 + 新增 11），无回归
+
+### Phase 4 — 文档 / OpenAPI
+
+- [x] `frontend/spec/weekly_demand.md` §Excel 导出子模块（v0.5.8 新增）已写入
+- [x] `frontend/spec/weekly_demand.md` 修订记录 v0.5.7→v0.5.8 已写入
+- [x] OpenAPI 由后端统一重导（前端不直接持有）；后端 `backend/openapi/dsp_uploads.json` 与 `pivot_query.json` v0.5.8 已含 2 个新端点
+
+### Phase 6 — 收尾
+
+- [x] todo list（本文件）所有 `[ ]` 改 `[x]`
+- [x] 全量 `npm test` 131/131 全绿，零回归
+- [x] `frontend/src/views/WeeklyDemandQuery.vue` / `PivotQuery.vue` / `api/*.js` / `utils/downloadBlob.js` 全有 JSDoc 中文
+
+---
+
+### 验证清单（每 PR）
+
+- [x] `npm test` 全绿（131/131 = 既有 120 + 新增 11）
+- [x] `src/utils/downloadBlob.js` 存在
+- [x] `src/views/WeeklyDemandQuery.vue` 结果卡 header 含「导出 Excel」按钮
+- [x] `src/views/PivotQuery.vue` 结果卡 header 含「导出 Excel」按钮
+- [x] 透视导出使用 `lastQueryRequest` 快照（不是当前 form）
+- [x] `frontend/spec/weekly_demand.md` §Excel 导出子模块已写入
+- [x] `frontend/.todo/weekly_demand.md`（本文件）v0.5.8 阶段全部 `[x]`

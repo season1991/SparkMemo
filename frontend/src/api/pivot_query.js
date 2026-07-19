@@ -38,6 +38,25 @@ export function queryPivot(req) {
 }
 
 
+// ==================== v0.5.8 Excel 导出 ====================
+
+
+/**
+ * 透视查询结果导出 .xlsx（v0.5.8 新增）。
+ *
+ * Body 与 queryPivot 完全相同；后端会再次执行 query_pivot + 笛卡尔积预检 + xlsx 构造。
+ *
+ * @param {object} req PivotQueryRequest（**必须是上次成功查询的请求快照**，否则结果与 UI 展示不一致）
+ * @returns {Promise<Blob>} xlsx 二进制（包含 sheet 1「透视结果」+ sheet 2「查询参数快照」）
+ */
+export function exportPivot(req) {
+  return client.post('/pivot-query/export', req, {
+    responseType: 'blob',
+    timeout: 60000,
+  })
+}
+
+
 // ==================== 透视查询辅助 lookup ====================
 //
 // 这些端点供前端下拉选项使用：

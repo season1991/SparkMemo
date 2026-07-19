@@ -252,6 +252,38 @@ def delete_upload(db, upload_id: int) -> bool:
     return True
 
 
+# ---------- v0.5.8 Excel 导出辅助 ----------
+
+
+def list_rows_all(db, upload_id: int) -> list[models.DspUploadRow]:
+    """拉取指定批次的事实行（不分页，按 id 升序）。
+
+    v0.5.8 新增：用于 `GET /api/dsp-uploads/{id}/rows/export` 端点。
+
+    行数上限由调用方在路由层校验（`MAX_DSP_EXPORT_ROWS`），本函数不加限制。
+
+    参数:
+        db: SQLAlchemy Session。
+        upload_id: 批次主键。
+
+    返回:
+        list[models.DspUploadRow]: 该批次下的全部事实行（可能为空）。
+
+    异常:
+        无业务异常。
+    """
+    rows = (
+        db.execute(
+            select(models.DspUploadRow)
+            .where(models.DspUploadRow.upload_id == upload_id)
+            .order_by(models.DspUploadRow.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
 # ---------- v0.5.4 级联下拉查询（去重值）----------
 
 

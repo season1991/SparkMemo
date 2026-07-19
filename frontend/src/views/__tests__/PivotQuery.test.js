@@ -21,9 +21,12 @@ vi.mock('vue-router', () => ({
 
 import * as pivotApi from '../../api/pivot_query.js'
 import * as dspApi from '../../api/dsp_uploads.js'
+import * as blobUtil from '../../utils/downloadBlob.js'
+import { ApiError } from '../../api/client.js'
 import PivotQuery from '../PivotQuery.vue'
 
 const queryPivotMock = vi.spyOn(pivotApi, 'queryPivot')
+const exportPivotMock = vi.spyOn(pivotApi, 'exportPivot')
 const lookupCountriesMock = vi.spyOn(pivotApi, 'lookupCountries')
 const lookupCategoriesMock = vi.spyOn(pivotApi, 'lookupCategories')
 const lookupConfigNamesMock = vi.spyOn(pivotApi, 'lookupConfigNames')
@@ -32,6 +35,7 @@ const getDistinctVendorsMock = vi.spyOn(dspApi, 'getDistinctVendors')
 const getDistinctItemsMock = vi.spyOn(dspApi, 'getDistinctItems')
 const getDistinctSubItemsMock = vi.spyOn(dspApi, 'getDistinctSubItems')
 const getDistinctVersionDatesMock = vi.spyOn(dspApi, 'getDistinctVersionDates')
+const downloadBlobMock = vi.spyOn(blobUtil, 'downloadBlob')
 
 const CURRENT_YEAR = String(new Date().getFullYear())
 
@@ -41,6 +45,7 @@ beforeEach(() => {
   ElMessageWarning.mockReset()
   ElMessageError.mockReset()
   queryPivotMock.mockReset()
+  exportPivotMock.mockReset()
   lookupCountriesMock.mockReset()
   lookupCategoriesMock.mockReset()
   lookupConfigNamesMock.mockReset()
@@ -697,5 +702,146 @@ describe('v0.5.7 PivotQuery onReset 同步清空两个字段', () => {
     vm.form.version_date_single = '2026-06-29'
     vm.onReset()
     expect(vm.form.version_date_single).toBe('')
+  })
+})
+
+
+// ==================== v0.5.8 Excel 导出 ====================
+
+
+describe('PivotQuery Excel 导出（v0.5.8）', () => {
+  it('初始无 result：lastQueryRequest 为 null', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    expect(vm.result).toBeNull()
+    expect(vm.lastQueryRequest).toBeNull()
+    expect(vm.exporting).toBe(false)
+  })
+
+  it('查询成功：lastQueryRequest 写入快照', async () => {
+    const resp = {
+      period_columns: ['2026-07-06'],
+      row_groups: [],
+      total_rows: 0,
+      version_dates: ['2026-06-29'],
+      date_granularity: 'week',
+    }
+    queryPivotMock.mockResolvedValue(resp)
+
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    // 走 canQuery 路径
+    vm.form.vendor = 'X'
+    vm.form.item = 'Y'
+    vm.form.sub_item = 'Z'
+    vm.form.version_dates = ['2026-06-29']
+    vm.form.years = CURRENT_YEAR
+    vm.form.months = []
+
+    await vm.onQuery()
+
+    expect(queryPivotMock).toHaveBeenCalledTimes(1)
+    // vm.result 是 Vue 响应式代理，用 toEqual 比对值
+    expect(vm.result).toEqual(resp)
+    expect(vm.lastQueryRequest).not.toBeNull()
+    expect(vm.lastQueryRequest.pivot_type).toBe('demand')
+    expect(vm.lastQueryRequest.vendor).toBe('X')
+  })
+
+  it('点「导出 Excel」：exportPivot(lastQueryRequest) + downloadBlob + success toast', async () => {
+    const snapshot = {
+      pivot_type: 'demand',
+      vendor: 'X', item: 'Y', sub_item: 'Z',
+      version_dates: ['2026-06-29'],
+      years: [2026],
+    }
+    const mockBlob = new Blob(['mock xlsx'])
+    exportPivotMock.mockResolvedValue(mockBlob)
+    downloadBlobMock.mockImplementation(() => {})
+
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.lastQueryRequest = snapshot
+    vm.result = { period_columns: [], row_groups: [], total_rows: 0, version_dates: [], date_granularity: 'week' }
+
+    await vm.onExport()
+
+    expect(exportPivotMock).toHaveBeenCalledTimes(1)
+    expect(exportPivotMock).toHaveBeenCalledWith(snapshot)
+    expect(downloadBlobMock).toHaveBeenCalledTimes(1)
+    // filename: pivot_demand_{YYYYMMDD_HHMMSS}.xlsx
+    const [, filename] = downloadBlobMock.mock.calls[0]
+    expect(filename).toMatch(/^pivot_demand_\d{8}_\d{6}\.xlsx$/)
+    expect(ElMessageSuccess).toHaveBeenCalledWith('已开始下载')
+    expect(vm.exporting).toBe(false)
+  })
+
+  it('「lastQueryRequest 隔离」：用户改 countries 后点导出 → 仍用旧 snapshot', async () => {
+    const oldSnapshot = {
+      pivot_type: 'demand',
+      vendor: 'X', item: 'Y', sub_item: 'Z',
+      version_dates: ['2026-06-29'],
+      countries: ['爱尔兰'],
+      years: [2026],
+    }
+    exportPivotMock.mockResolvedValue(new Blob(['mock']))
+    downloadBlobMock.mockImplementation(() => {})
+
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.lastQueryRequest = oldSnapshot
+    vm.result = { period_columns: [], row_groups: [], total_rows: 0, version_dates: [], date_granularity: 'week' }
+    // 用户改了 form.countries（不会影响 lastQueryRequest）
+    vm.form.countries = ['日本', '马来西亚']
+
+    await vm.onExport()
+
+    expect(exportPivotMock).toHaveBeenCalledTimes(1)
+    // 关键断言：调用参数仍是 oldSnapshot，不是当前 form
+    expect(exportPivotMock).toHaveBeenCalledWith(oldSnapshot)
+    expect(exportPivotMock.mock.calls[0][0].countries).toEqual(['爱尔兰'])
+    expect(exportPivotMock.mock.calls[0][0].countries).not.toEqual(['日本', '马来西亚'])
+  })
+
+  it('onReset 后：lastQueryRequest 清空；onExport 无响应', async () => {
+    exportPivotMock.mockResolvedValue(new Blob(['mock']))
+
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.lastQueryRequest = {
+      pivot_type: 'demand', vendor: 'X', item: 'Y', sub_item: 'Z',
+      version_dates: ['2026-06-29'], years: [2026],
+    }
+    getDistinctVendorsMock.mockResolvedValue([])
+    vm.onReset()
+    expect(vm.lastQueryRequest).toBeNull()
+
+    await vm.onExport()
+    expect(exportPivotMock).not.toHaveBeenCalled()
+  })
+
+  it('422 笛卡尔积超限：showApiError 走 422 → ElMessage.error', async () => {
+    const apiErr = new ApiError(
+      422,
+      'cartesian product estimated 60000 rows exceeds limit 50000',
+      'cartesian product estimated 60000 rows exceeds limit 50000',
+    )
+    exportPivotMock.mockRejectedValue(apiErr)
+    downloadBlobMock.mockImplementation(() => {})
+
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.lastQueryRequest = {
+      pivot_type: 'demand', vendor: 'X', item: 'Y', sub_item: 'Z',
+      version_dates: ['2026-06-29'], years: [2026],
+    }
+
+    const beforeCalls = downloadBlobMock.mock.calls.length
+    await vm.onExport()
+    const afterCalls = downloadBlobMock.mock.calls.length
+    // 422 错误路径下不应触发下载（calls 不增）
+    expect(afterCalls).toBe(beforeCalls)
+    expect(ElMessageError).toHaveBeenCalledWith(expect.stringContaining('cartesian product'))
+    expect(vm.exporting).toBe(false)
   })
 })

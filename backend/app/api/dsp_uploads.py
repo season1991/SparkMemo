@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import IntegrityError
 
 from app import crud, models
@@ -36,12 +37,17 @@ from app.services.dsp_parser import (
     SheetMissingError,
     parse_excel,
 )
+from app.services.excel_export import build_dsp_rows_xlsx, _export_timestamp
 
 
 router = APIRouter(prefix="/api/dsp-uploads", tags=["dsp-uploads"])
 
 MAX_BYTES = 20 * 1024 * 1024  # 20 MB；spec §Post 入参硬上限
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+XLSX_CT = XLSX_MIME  # alias for export endpoint Content-Type
+
+# v0.5.8：事实行导出单次上限
+MAX_DSP_EXPORT_ROWS = 200_000
 
 
 # ==================== v0.5.4 级联下拉查询（去重值） ====================
@@ -407,3 +413,51 @@ def delete_upload_endpoint(upload_id: int, db=Depends(get_db)):
     if not ok:
         raise HTTPException(status_code=404, detail="dsp upload not found")
     return None
+
+
+# ==================== v0.5.8 Excel 导出 ====================
+
+
+@router.get("/{upload_id}/rows/export")
+def rows_export_endpoint(upload_id: int, db=Depends(get_db)):
+    """导出指定批次的全部事实行为 .xlsx（不分页）。
+
+    文件名：`dsp_upload_{id}_rows_{YYYYMMDD_HHMMSS}.xlsx`，纯 ASCII。
+
+    参数:
+        upload_id: 批次主键。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        StreamingResponse: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+        二进制流 + `Content-Disposition: attachment; filename="..."`。
+
+    异常:
+        HTTPException 404: 批次不存在。
+        HTTPException 422: 事实行数 > `MAX_DSP_EXPORT_ROWS`（默认 200_000）。
+        HTTPException 500: pandas / openpyxl 等运行时异常。
+    """
+    upload = crud.dsp_upload.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="dsp upload not found")
+
+    rows = crud.dsp_upload.list_rows_all(db, upload_id)
+    if len(rows) > MAX_DSP_EXPORT_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"导出行数 {len(rows)} 超过上限 {MAX_DSP_EXPORT_ROWS}；"
+                "请缩小时间范围或拆分批次"
+            ),
+        )
+
+    content = build_dsp_rows_xlsx(rows)
+    filename = f"dsp_upload_{upload_id}_rows_{_export_timestamp()}.xlsx"
+    return StreamingResponse(
+        iter([content]),
+        media_type=XLSX_CT,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(content)),
+        },
+    )

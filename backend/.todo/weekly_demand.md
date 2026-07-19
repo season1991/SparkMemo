@@ -236,3 +236,111 @@
 - [x] **6.2** 全量 `pytest -q` 254/254 全绿，零回归（其中 pivot_query 40/40：原 33 + 新增 7）
 - [x] **6.3** `grep "占位"` 在 `app/crud/pivot_query.py` / `app/schemas.py` / `app/api/pivot_query.py` 三处全部 0 命中
 - [x] **6.4** 检查 `backend/openapi/pivot_query.json` 内不再含「占位」/「placeholder」字样（0 命中）
+
+---
+
+## v0.5.8（新增 Excel 导出子模块）
+
+> 适配规格：`backend/spec/weekly_demand.md` §Excel 导出子模块（v0.5.8 新增）
+> 触发范围：仅周需求「查询」子模块 + 透视查询子模块；其它子功能不受影响。
+> TDD：严格按 README §5.1「先 RED → 后 GREEN」流程（沿用 v0.5.7 阶段的承诺）
+> 库选型：pandas + openpyxl（pandas 作为 DataFrame 容器，openpyxl 作为 xlsx 写引擎；沿用既有 `openpyxl>=3.1`）
+
+### Phase 0 — 规格定稿
+
+- [x] `backend/spec/weekly_demand.md` §Excel 导出子模块（§1~§10）已写入
+- [x] `backend/spec/weekly_demand.md` 末尾追加 `v0.5.7 → v0.5.8` 修订记录表
+
+### Phase 1 — Todo List（本文件）
+
+- [x] 在本文件追加 v0.5.8 阶段章节
+
+### Phase 2 — 测试驱动（RED）
+
+> 文件：`backend/tests/test_dsp_export.py` + `backend/tests/test_pivot_export.py`
+> 目标：13 条用例，pytest 期望全部红（404 / 422 / 含 ImportError）
+> **RED 实测**：13/13 全红（404 / AttributeError），符合 TDD 期望。
+
+#### 2.1 DspUploadRow 导出（6 条）
+
+- [x] **2.1.1** `test_rows_export_200_basic` 构造 batch + 10 行 → 200，下载文件用 openpyxl 重新打开 → 断言列头与单元格内容与 JSON 端点一致
+- [x] **2.1.2** `test_rows_export_200_empty` 0 行 batch → 200，sheet 仅表头 1 行
+- [x] **2.1.3** `test_rows_export_404_unknown_id` 不存在的 id → 404
+- [x] **2.1.4** `test_rows_export_422_over_limit` 200,001 行 → 422 + 中文 detail `"导出行数 N 超过上限 200000；…"`
+- [x] **2.1.5** `test_rows_export_headers` 断言 `Content-Type` + `Content-Disposition` 含 `filename="dsp_upload_{id}_rows_*.xlsx"`
+- [x] **2.1.6** `test_rows_export_formula_injection` `country='=1+1'` → 打开后 cell 值前缀 `'=`
+
+#### 2.2 透视导出（7 条）
+
+- [x] **2.2.1** `test_pivot_export_200_demand` `pivot_type='demand'` → sheet 1 列头 = `[7 列基础] + period_columns`，行数 = `len(row_groups)`
+- [x] **2.2.2** `test_pivot_export_200_demand_plus_supply` 4 行/组，含 `TTL_GAP` / `Rolling_TTLGAP`
+- [x] **2.2.3** `test_pivot_export_sheet2_snapshot` sheet 2 5 列快照，version_dates 用 `; ` 拼接
+- [x] **2.2.4** `test_pivot_export_422_cascade_validation` 级联校验失败（config_names 缺 categories 等）
+- [x] **2.2.5** `test_pivot_export_422_cartesian_overflow` `monkeypatch` 调低 `MAX_CARTESIAN` → 422
+- [x] **2.2.6** `test_pivot_export_422_demand_plus_supply_multi_versions` `demand_plus_supply` + 2 version_dates → 422
+- [x] **2.2.7** `test_pivot_export_200_empty_row_groups` `row_groups=[]` → sheet 1 仅 7 列基础表头，sheet 2 快照仍正确
+
+### Phase 3 — 后端实现（GREEN）
+
+#### 3.1 依赖
+
+- [x] `backend/requirements.txt` 加 `pandas>=2.0`
+- [x] 在 dev_env 安装：`pandas 3.0.3` + 依赖 `numpy 2.4.6` + `python-dateutil 2.9.0.post0`
+
+#### 3.2 services 层
+
+- [x] `app/services/excel_export.py` 新建：
+  - `_export_timestamp() -> str` 返回 `YYYYMMDD_HHMMSS`
+  - `_sanitize_formula(value: object) -> object` 字符串首字符 ∈ `{=, +, -, @, \t, \r}` → 加 `'` 前缀
+  - `_auto_width(headers: list[str], rows: list[list]) -> list[float]` 列宽自适应
+  - `build_dsp_rows_xlsx(rows: Iterable[DspUploadRow]) -> bytes` → 单 sheet「事实行」BytesIO
+  - `build_pivot_xlsx(req: PivotQueryRequest, resp: PivotQueryResponse) -> bytes` → sheet 1「透视结果」+ sheet 2「查询参数快照」
+
+#### 3.3 路由层
+
+- [x] `app/api/dsp_uploads.py` 新增 `rows_export_endpoint`：
+  - `GET /api/dsp-uploads/{id}/rows/export`
+  - 校验 `crud.dsp_upload.get_upload(db, id)` → None 时 404
+  - 拉全部行 `crud.dsp_upload.list_rows_all(db, id)` → 超 `MAX_DSP_EXPORT_ROWS=200_000` → 422
+  - 调 `excel_export.build_dsp_rows_xlsx` → `StreamingResponse` + `Content-Disposition`
+  - 文件名 `dsp_upload_{id}_rows_{_export_timestamp()}.xlsx`
+
+- [x] `app/api/pivot_query.py` 新增 `pivot_export_endpoint`：
+  - `POST /api/pivot-query/export`
+  - 复用既有 `PivotQueryRequest` body（**不**重新定义 schema）
+  - 路由层 `estimate_size` 预检 → 超 `MAX_CARTESIAN=50_000` → 422
+  - 调 `crud.pivot_query.query_pivot` 拿 `PivotQueryResponse`
+  - 调 `excel_export.build_pivot_xlsx` → `StreamingResponse`
+  - 文件名 `pivot_{pivot_type}_{_export_timestamp()}.xlsx`
+
+- [x] `app/crud/dsp_upload.py` 新增 `list_rows_all(db, upload_id) -> list[DspUploadRow]`（不分页版本）
+
+#### 3.4 测试基础设施
+
+- [x] `backend/tests/test_dsp_export.py` 新建（6 用例）
+- [x] `backend/tests/test_pivot_export.py` 新建（7 用例）
+- [x] 复用既有 `client` / `db` / `make_dsp_upload` / `make_week_dt` 等 fixture，不新建基础设施
+- [x] 跑 `pytest backend/tests/test_dsp_export.py backend/tests/test_pivot_export.py -v` 13/13 全绿
+
+### Phase 4 — OpenAPI
+
+- [x] 启动 FastAPI，重新生成 `backend/openapi/pivot_query.json` 与 `backend/openapi/dsp_uploads.json`（含 2 个新端点）
+- [x] 验证 schema：`PivotQueryRequest` 字段未新增（export 复用同一 schema）；`MAX_DSP_EXPORT_ROWS=200_000` 不出现在 schema（仅 Python 常量）
+
+### Phase 6 — 收尾
+
+- [x] todo list（本文件）所有 `[ ]` 改 `[x]`
+- [x] 全量 `pytest -q` 无回归（在 v0.5.7 的 254/254 基础上 +14 = 268/268，含真实文件回归）
+- [x] `grep -r "openpyxl" backend/app/` 仅 docstring 命中 + `app/services/excel_export.py` 实际 import（路由层无直接 import，符合 §7）
+- [x] `requirements.txt` 含 `pandas>=2.0` + `openpyxl>=3.1`
+- [x] 更新 `backend/spec/weekly_demand.md` 顶部版本号（如项目惯例要求 v0.5.8 顶层标识）
+
+---
+
+### 验证清单（每 PR）
+
+- [x] `pytest backend/tests` 全绿（268/268）
+- [x] `requirements.txt` 含 `pandas>=2.0`
+- [x] `app/services/excel_export.py` 存在
+- [x] `backend/openapi/*.json` 含 2 个新端点
+- [x] `backend/.todo/weekly_demand.md`（本文件）v0.5.8 阶段全部 `[x]`

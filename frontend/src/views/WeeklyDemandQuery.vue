@@ -15,6 +15,7 @@
  */
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import { ApiError, showApiError } from '../api/client.js'
 import {
   getDistinctVendors,
@@ -22,8 +23,10 @@ import {
   getDistinctSubItems,
   getDistinctVersionDates,
   findBatchByVersion,
-  listDspUploadRows
+  listDspUploadRows,
+  downloadDspRowsXlsx
 } from '../api/dsp_uploads.js'
+import { downloadBlob } from '../utils/downloadBlob.js'
 
 // 下拉选项
 const vendorOptions = ref([])
@@ -43,6 +46,9 @@ const result = ref(null)
 const rows = ref([])
 const rowsTotal = ref(0)
 const rowsLoading = ref(false)
+
+// v0.5.8 新增：Excel 导出状态
+const exporting = ref(false)
 
 const PREVIEW_PAGE_SIZES = [20, 50, 100]
 
@@ -205,6 +211,31 @@ async function onPageChange(page) {
   }
 }
 
+// ==================== v0.5.8 Excel 导出 ====================
+
+
+function timestampForFilename() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+async function onExport() {
+  if (!result.value) return
+  exporting.value = true
+  try {
+    const blob = await downloadDspRowsXlsx(result.value.id)
+    const filename = `dsp_upload_${result.value.id}_rows_${timestampForFilename()}.xlsx`
+    downloadBlob(blob, filename)
+    ElMessage.success('已开始下载')
+  } catch (err) {
+    if (err instanceof ApiError) showApiError(err)
+    else ElMessage.error(err.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 function onReset() {
   form.vendor = ''
   form.item = ''
@@ -341,6 +372,15 @@ onMounted(() => {
             <el-tag size="small" type="info">{{ result.item }}</el-tag>
             <el-tag size="small" type="info">{{ result.sub_item }}</el-tag>
             <el-tag size="small" type="success">{{ result.version_date }}</el-tag>
+            <!-- v0.5.8 新增：导出 Excel 按钮 -->
+            <el-button
+              size="small"
+              type="success"
+              :icon="Download"
+              :loading="exporting"
+              :disabled="exporting"
+              @click="onExport"
+            >导出 Excel</el-button>
           </span>
         </div>
         <div v-if="result.source_filename" class="result-source">

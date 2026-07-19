@@ -25,6 +25,8 @@ vi.mock('vue-router', () => ({
 }))
 
 import * as api from '../../api/dsp_uploads.js'
+import * as blobUtil from '../../utils/downloadBlob.js'
+import { ApiError } from '../../api/client.js'
 import WeeklyDemandHub from '../WeeklyDemandHub.vue'
 import WeeklyDemandQuery from '../WeeklyDemandQuery.vue'
 import WeeklyDemandDelete from '../WeeklyDemandDelete.vue'
@@ -32,6 +34,8 @@ import WeeklyDemandDelete from '../WeeklyDemandDelete.vue'
 const findMock = vi.spyOn(api, 'findBatchByVersion')
 const rowsMock = vi.spyOn(api, 'listDspUploadRows')
 const deleteMock = vi.spyOn(api, 'deleteDspUpload')
+const downloadXlsxMock = vi.spyOn(api, 'downloadDspRowsXlsx')
+const downloadBlobMock = vi.spyOn(blobUtil, 'downloadBlob')
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -43,6 +47,8 @@ beforeEach(() => {
   findMock.mockReset()
   rowsMock.mockReset()
   deleteMock.mockReset()
+  downloadXlsxMock.mockReset()
+  downloadBlobMock.mockReset()
 })
 
 describe('WeeklyDemandHub', () => {
@@ -153,5 +159,83 @@ describe('WeeklyDemandDelete 组件挂载', () => {
     await wrapper.vm.onDelete()
     expect(deleteMock).not.toHaveBeenCalled()
     expect(wrapper.vm.preview).not.toBeNull()
+  })
+})
+
+
+// ==================== v0.5.8 Excel 导出 ====================
+
+
+describe('WeeklyDemandQuery Excel 导出（v0.5.8）', () => {
+  it('初始无 result：header 无「导出 Excel」按钮', () => {
+    const wrapper = mount(WeeklyDemandQuery, { global: { stubs: true } })
+    expect(wrapper.vm.result).toBeNull()
+    // v-if="result" 控制结果卡整体；按钮在 result 卡片 header 内
+    expect(wrapper.find('.result-card').exists()).toBe(false)
+    // 全局搜索应找不到「导出 Excel」按钮文本（DOM 中不存在）
+    expect(wrapper.text()).not.toContain('导出 Excel')
+  })
+
+  it('查询成功：result 写入 → header 出现「导出 Excel」按钮；idle 态', async () => {
+    const batch = {
+      id: 12, vendor: 'X', item: 'Y', sub_item: 'Z', version_date: '2026-07-15',
+      source_filename: 'x.xlsx', row_count: 100, created_at: '2026-07-15',
+    }
+    findMock.mockResolvedValue(batch)
+    rowsMock.mockResolvedValue({ items: [], total: 100 })
+
+    const wrapper = mount(WeeklyDemandQuery, { global: { stubs: true } })
+    wrapper.vm.result = batch
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.result.id).toBe(12)
+    // 验证 exporting ref 存在 + 初值 false
+    expect(wrapper.vm.exporting).toBe(false)
+  })
+
+  it('点「导出 Excel」：调 downloadDspRowsXlsx(result.id) + downloadBlob + success toast', async () => {
+    const batch = {
+      id: 12, vendor: 'X', item: 'Y', sub_item: 'Z', version_date: '2026-07-15',
+      source_filename: 'x.xlsx', row_count: 100, created_at: '2026-07-15',
+    }
+    const mockBlob = new Blob(['mock xlsx'])
+    downloadXlsxMock.mockResolvedValue(mockBlob)
+    downloadBlobMock.mockImplementation(() => {})
+
+    const wrapper = mount(WeeklyDemandQuery, { global: { stubs: true } })
+    wrapper.vm.result = batch
+    await wrapper.vm.onExport()
+
+    expect(downloadXlsxMock).toHaveBeenCalledTimes(1)
+    expect(downloadXlsxMock).toHaveBeenCalledWith(12)
+    expect(downloadBlobMock).toHaveBeenCalledTimes(1)
+    // filename 形如 dsp_upload_12_rows_20260810_153045.xlsx
+    const [, filename] = downloadBlobMock.mock.calls[0]
+    expect(filename).toMatch(/^dsp_upload_12_rows_\d{8}_\d{6}\.xlsx$/)
+    // toast
+    expect(ElMessageSuccess).toHaveBeenCalledWith('已开始下载')
+    // exporting ref 已恢复
+    expect(wrapper.vm.exporting).toBe(false)
+  })
+
+  it('422 超限：toast 显示后端 detail；exporting 恢复 idle', async () => {
+    const batch = {
+      id: 12, vendor: 'X', item: 'Y', sub_item: 'Z', version_date: '2026-07-15',
+      source_filename: 'x.xlsx', row_count: 100, created_at: '2026-07-15',
+    }
+    const apiErr = new ApiError(
+      422,
+      '导出行数 200001 超过上限 200000；请缩小时间范围或拆分批次',
+      '导出行数 200001 超过上限 200000；请缩小时间范围或拆分批次',
+    )
+    downloadXlsxMock.mockRejectedValue(apiErr)
+
+    const wrapper = mount(WeeklyDemandQuery, { global: { stubs: true } })
+    wrapper.vm.result = batch
+    await wrapper.vm.onExport()
+
+    expect(downloadBlobMock).not.toHaveBeenCalled()
+    // showApiError → ApiError.status !== 409 → ElMessage.error
+    expect(ElMessageError).toHaveBeenCalledWith(apiErr.message)
+    expect(wrapper.vm.exporting).toBe(false)
   })
 })

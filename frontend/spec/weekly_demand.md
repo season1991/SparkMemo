@@ -883,4 +883,340 @@ function getCellClass(row, periodDate) {
 | v0.5.1 | §2.4 | 「载入」成功后整个上半 form disabled（v0.5.2 撤回）|
 | v0.5.1 | §2.5 | 结果预览 50 条 + 分页（**新增**） |
 | v0.5.1 | §2.6 | 重置：hasResult 时二次确认 |
+
+## Excel 导出子模块（v0.5.8 新增）
+
+> **定位**：在 v0.5.7 既有「周需求 - 查询」与「透视查询」两个**只读**子模块的结果卡上加「导出 Excel」按钮，把后端返回的 xlsx 二进制流触发为浏览器原生下载。
+>
+> **范围声明**：前端零持久化、零业务计算；只做 axios 请求（`responseType: 'blob'`）+ 浏览器下载触发（`URL.createObjectURL` + `<a download>`）。无新数据写入、无新表、无新依赖。
+
+### 1. 业务目标
+
+让用户对查询 / 透视结果一键下载 .xlsx，浏览器原生下载。
+- 后端把视图数据（事实行全集 / pivot 表）转成 xlsx 二进制；
+- 前端用 axios 接收 blob；
+- 浏览器触发下载，文件名 = `dsp_upload_{id}_rows_{YYYYMMDD_HHMMSS}.xlsx` 或 `pivot_{pivot_type}_{YYYYMMDD_HHMMSS}.xlsx`。
+
+### 2. 新增依赖
+
+**无新增依赖**。前端使用：
+- `axios`（既有）：`responseType: 'blob'` 接收 xlsx 二进制
+- 浏览器原生 API：`URL.createObjectURL` + `<a download>` + `URL.revokeObjectURL`
+
+### 3. 文件结构新增
+
+```
+frontend/src/
+├── api/
+│   ├── dsp_uploads.js          # v0.5.8 新增 downloadDspRowsXlsx
+│   └── pivot_query.js          # v0.5.8 新增 exportPivot
+├── utils/
+│   └── downloadBlob.js         # v0.5.8 新建：downloadBlob(blob, filename)
+└── views/
+    ├── WeeklyDemandQuery.vue   # 结果卡 header 加「导出 Excel」
+    └── PivotQuery.vue          # 结果卡 header 加「导出 Excel」+ lastQueryRequest 快照
+```
+
+### 4. utils/downloadBlob.js（新建）
+
+```js
+/**
+ * 浏览器原生下载工具（v0.5.8）。
+ *
+ * 把 Blob / Response 二进制触发为浏览器下载。
+ * 步骤：URL.createObjectURL → 动态创建 <a download> → click() → revokeObjectURL。
+ *
+ * 注意事项：
+ * - 必须 revokeObjectURL，否则 blob 内存泄漏（特别是频繁下载场景）
+ * - filename 仅作 <a download> 属性；HTTP 响应的 Content-Disposition 优先
+ * - 在 jsdom 中调用不会真正下载，但 URL.createObjectURL 可被 spy 验证
+ *
+ * @param {Blob} blob 浏览器 Blob 对象（来自 axios responseType:'blob'）
+ * @param {string} filename 下载文件名（不含路径）
+ */
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+```
+
+### 5. API 层
+
+#### 5.1 `api/dsp_uploads.js` 新增
+
+```js
+/**
+ * 下载指定 batch 的事实行 .xlsx（v0.5.8 新增）。
+ *
+ * @param {number} id batch 主键
+ * @returns {Promise<Blob>} xlsx 二进制
+ */
+export function downloadDspRowsXlsx(id) {
+  return client.get(`/dsp-uploads/${id}/rows/export`, {
+    responseType: 'blob',
+    timeout: 60000,  // 大 batch 导出可能 > 10s 默认
+  })
+}
+```
+
+#### 5.2 `api/pivot_query.js` 新增
+
+```js
+/**
+ * 透视查询结果导出 .xlsx（v0.5.8 新增）。
+ *
+ * Body 与 queryPivot 完全相同；后端会再次执行 query_pivot + 笛卡尔积预检 + xlsx 构造。
+ *
+ * @param {object} req PivotQueryRequest（**必须是上次成功查询的请求快照**，否则结果与 UI 展示不一致）
+ * @returns {Promise<Blob>} xlsx 二进制（包含 sheet 1「透视结果」+ sheet 2「查询参数快照」）
+ */
+export function exportPivot(req) {
+  return client.post('/pivot-query/export', req, {
+    responseType: 'blob',
+    timeout: 60000,
+  })
+}
+```
+
+### 6. View 层
+
+#### 6.1 `WeeklyDemandQuery.vue` 改动
+
+**结果卡 header 新增「导出 Excel」按钮**：
+
+```vue
+<template #header>
+  <div class="result-header">
+    <span class="result-title">
+      ✓ 已找到 1 个批次，共 <strong>{{ result.row_count }}</strong> 条数据
+    </span>
+    <span class="result-meta">
+      <el-tag size="small" type="info">{{ result.vendor }}</el-tag>
+      <!-- 既有 4 个 tag 不变 -->
+      <!-- v0.5.8 新增：导出按钮 -->
+      <el-button
+        size="small"
+        type="success"
+        :icon="Download"
+        :loading="exporting"
+        :disabled="exporting"
+        @click="onExport"
+      >导出 Excel</el-button>
+    </span>
+  </div>
+  ...
+</template>
+```
+
+**script 新增**：
+
+```js
+import { Download } from '@element-plus/icons-vue'
+import { downloadDspRowsXlsx } from '../api/dsp_uploads.js'
+import { downloadBlob } from '../utils/downloadBlob.js'
+
+const exporting = ref(false)
+
+async function onExport() {
+  if (!result.value) return
+  exporting.value = true
+  try {
+    const blob = await downloadDspRowsXlsx(result.value.id)
+    // 文件名前端组装（与后端 Content-Disposition 规则一致）
+    const filename = `dsp_upload_${result.value.id}_rows_${timestampForFilename()}.xlsx`
+    downloadBlob(blob, filename)
+    ElMessage.success('已开始下载')
+  } catch (err) {
+    if (err instanceof ApiError) showApiError(err)
+    else ElMessage.error(err.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function timestampForFilename() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+```
+
+#### 6.2 `PivotQuery.vue` 改动
+
+**结果卡 header 新增「导出 Excel」按钮**（同 §6.1 模式）：
+
+```vue
+<template #header>
+  <div class="result-header">
+    <span class="result-title">✓ 查询结果</span>
+    <span class="result-meta">
+      <el-tag size="small" type="info">{{ result.total_rows }} 行</el-tag>
+      <!-- 既有 4 个 tag 不变 -->
+      <!-- v0.5.8 新增：导出按钮 -->
+      <el-button
+        size="small"
+        type="success"
+        :icon="Download"
+        :loading="exporting"
+        :disabled="exporting"
+        @click="onExport"
+      >导出 Excel</el-button>
+    </span>
+  </div>
+</template>
+```
+
+**script 新增 + 关键修改**：
+
+```js
+import { Download } from '@element-plus/icons-vue'
+import { exportPivot } from '../api/pivot_query.js'
+import { downloadBlob } from '../utils/downloadBlob.js'
+
+const exporting = ref(false)
+// v0.5.8 新增：上次成功查询的请求快照，供「导出 Excel」使用
+const lastQueryRequest = ref(null)
+
+async function onQuery() {
+  // ... 既有逻辑 ...
+  const req = buildRequest()
+  try {
+    const res = await queryPivot(req)
+    result.value = res
+    lastQueryRequest.value = req  // ← v0.5.8 新增：快照
+    ElMessage.success(`查询完成：${res.total_rows} 行 · ${res.period_columns.length} 个日期列`)
+  } catch (err) {
+    // ... 既有错误处理 ...
+  }
+}
+
+async function onExport() {
+  if (!lastQueryRequest.value) return  // 无成功查询结果 → 不响应
+  exporting.value = true
+  try {
+    const blob = await exportPivot(lastQueryRequest.value)
+    const filename = `pivot_${lastQueryRequest.value.pivot_type}_${timestampForFilename()}.xlsx`
+    downloadBlob(blob, filename)
+    ElMessage.success('已开始下载')
+  } catch (err) {
+    if (err instanceof ApiError) showApiError(err)
+    else ElMessage.error(err.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function onReset() {
+  // ... 既有逻辑 ...
+  lastQueryRequest.value = null  // ← v0.5.8 新增：随重置一起清
+}
+```
+
+**为什么用 `lastQueryRequest` 快照而不是当前 form**：
+- 用户在结果展示后可能改了某个筛选条件（如改 countries）但忘了点「查询」重跑
+- 若是当前 form，导出会得到"未展示过的数据"，与 UI 不一致 → 困惑
+- 快照保证导出 = 表格上看到的那份数据
+- 后端 `query_pivot` 本身是无状态的，必须靠前端传 body，所以前端必须有这个快照
+
+### 7. 错误约定（沿用 §3 + 本模块新增）
+
+| HTTP | 场景 | UI |
+|------|------|----|
+| 404 | DspUploadRow 导出：batch 不存在 | `ElMessage.error('dsp upload not found')` |
+| 422 | DspUploadRow 导出：超 200,000 行 | `ElMessage.error(detail)`（后端中文 detail "导出行数 N 超过上限 200000；…"） |
+| 422 | 透视导出：级联校验失败 / 笛卡尔积超限 / dps 多 version_date | `showApiError(err)` 沿用 |
+| 500 | 后端 pandas / openpyxl 异常 | `ElMessage.error('服务异常，请稍后重试')` |
+| 网络 | `ECONNABORTED` 或断网 | `ElMessage.error('网络异常，请稍后重试')` |
+
+### 8. 状态文案（新增）
+
+| 场景 | 文案 |
+|------|------|
+| 导出按钮 idle | 「导出 Excel」 |
+| 导出触发成功 | 「已开始下载」 |
+| 422 超限 | 后端 detail 直传（中文）|
+| 422 透视级联 / 笛卡尔积 | 后端 detail 直传（沿用 §4）|
+
+### 9. 不实现的组件（明确范围）
+
+- ❌ 不做「下载历史」「最近导出列表」
+- ❌ 不做服务端压缩 / OSS 上传 / 邮件发送
+- ❌ 不做异步任务 + 进度条（同步阻塞；典型 < 5 MB 通常 < 3s）
+- ❌ 不做导出格式选择（CSV / PDF / XLSX 二选一）
+- ❌ 不做导出范围筛选（导出必须 = 当前 query 结果的全部数据，**不允许用户在结果展示后改筛选然后用旧数据导出**——通过 `lastQueryRequest` 快照强制对齐）
+- ❌ 不在 DspUploadRow 导出时附加「查询参数快照」sheet（后端行为；前端无感知）
+- ❌ 不在前端校验 `MAX_DSP_EXPORT_ROWS`（后端 spec §4.2 负责；前端仅做"按钮 disabled 直到有 result"）
+
+### 10. Test Plan
+
+#### 10.1 utils/downloadBlob.js（新建）
+
+| 用例 | 期望 |
+|------|------|
+| 调用 `downloadBlob(blob, 'test.xlsx')` | `URL.createObjectURL` 被调用 1 次；`<a>` 元素被创建且 `download='test.xlsx'`；`click()` 被调用；`revokeObjectURL` 被调用 |
+
+#### 10.2 `api/dsp_uploads.js::downloadDspRowsXlsx`
+
+| 用例 | 期望 |
+|------|------|
+| 调 `downloadDspRowsXlsx(12)` | 走 `GET /dsp-uploads/12/rows/export`；`responseType: 'blob'`；`timeout >= 10000`（设 60000）|
+
+#### 10.3 `api/pivot_query.js::exportPivot`
+
+| 用例 | 期望 |
+|------|------|
+| 调 `exportPivot(req)` | 走 `POST /pivot-query/export`；body = req；`responseType: 'blob'`；`timeout >= 10000` |
+
+#### 10.4 `WeeklyDemandQuery.vue`
+
+| 用例 | 期望 |
+|------|------|
+| 初始无 result 时 | header 无「导出 Excel」按钮 |
+| 查询成功后 | header 出现「导出 Excel」按钮；`:loading="false"`、`:disabled="false"` |
+| 点「导出 Excel」 | `downloadDspRowsXlsx` 被调用 1 次（参数 = result.id）；成功后 `downloadBlob` 被调用，filename 含 `dsp_upload_{id}_rows_` 前缀 + `.xlsx` 后缀；toast「已开始下载」 |
+| 导出中再次点击 | 按钮 `:disabled="true"`，不重复触发 |
+| 422 超限 | toast 显示后端 detail；按钮恢复 idle |
+| 网络错误 | toast「网络异常，请稍后重试」 |
+
+#### 10.5 `PivotQuery.vue`
+
+| 用例 | 期望 |
+|------|------|
+| 初始无 result 时 | header 无「导出 Excel」按钮 |
+| 查询成功后 | header 出现「导出 Excel」按钮 |
+| 点「导出 Excel」 | `exportPivot` 被调用 1 次（参数 = `lastQueryRequest`，**不是当前 form**）；`downloadBlob` 被调用；filename 含 `pivot_{pivot_type}_` 前缀 |
+| 用户改 countries 后再点导出 | `exportPivot` 接收的仍是上次查询的 countries（验证 lastQueryRequest 隔离） |
+| onReset 后 | `lastQueryRequest = null`；再次查询前点导出按钮无响应 |
+| onPivotTypeChange 后 | `result = null` 且 `lastQueryRequest = null`（避免模式切换后导出旧模式数据）|
+| 422 笛卡尔积超限（手动注入 mock） | `showApiError` 走 422 分支；toast 含 "cartesian product" |
+
+### 11. Assumptions
+
+1. 后端 v0.5.8 已上线；导出端点 `GET /api/dsp-uploads/{id}/rows/export` + `POST /api/pivot-query/export` 可用。
+2. 后端 `Content-Disposition` 响应头含正确 filename；前端**不解析**响应头取 filename，而是直接前端组装（见 §6.1/§6.2），避免 axios blob 模式下响应头访问的额外复杂度。
+3. 文件名时戳由前端 `new Date()` 生成（与后端 `_export_timestamp` 同时区，均为本地时区），存在秒级偏差。**这是已知接受的偏差**：两份 timestamp 的实际语义都是「客户端/服务端看到请求的时刻」，用户感知一致。
+4. 单文件下载，前端不需要并发控制；同一用户快速连点「导出」只会触发第二次 `:disabled` 拦截。
+5. 浏览器对 blob 下载的兼容性 ≥ 95%；jsdom 单元测试 spy `URL.createObjectURL` 即可。
+
+---
+
+### v0.5.7 → v0.5.8（新增 Excel 导出子模块）
+
+| 章节 | v0.5.7 | v0.5.8 |
+|------|--------|--------|
+| 端点总览（侧栏视图） | 5 个路由（Hub / Upload / Query / Delete / Pivot） | 无新增路由；按钮放在既有结果卡 header |
+| `api/dsp_uploads.js` | 5 函数 + 4 级联查询 | **新增** `downloadDspRowsXlsx(id)`（responseType: 'blob'） |
+| `api/pivot_query.js` | `queryPivot` + 4 lookup | **新增** `exportPivot(req)`（responseType: 'blob'） |
+| `utils/` | `dspFilename.js` | **新增** `downloadBlob.js` |
+| `views/WeeklyDemandQuery.vue` | 结果卡只展示元信息 + 事实行分页 | 结果卡 header 加「导出 Excel」按钮 + `exporting` ref + `onExport` |
+| `views/PivotQuery.vue` | 透视表渲染（v0.5.7 视觉分组沿用） | 结果卡 header 加「导出 Excel」按钮 + `lastQueryRequest` 快照 + `onExport` |
+| 测试 | 既有 40+ 测 | **新增 9 测**：downloadBlob 1 + WeeklyDemand 4 + PivotQuery 4（详见 §10）|
+| 不实现的组件 | 6 项 | **新增 8 项**（详见 §9）|
+| 数据库 / 后端 | 既有 | 无新增依赖；后端 v0.5.8 配套 |
 | v0.5.1 | §5 | 测试计划引入 vitest 框架 |

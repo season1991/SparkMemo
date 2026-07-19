@@ -15,13 +15,17 @@ v0.5.7 业务范围：
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app import crud
 from app.deps import get_db
 from app.schemas import PivotQueryRequest, PivotQueryResponse
+from app.services.excel_export import _export_timestamp, build_pivot_xlsx
 
 
 router = APIRouter(prefix="/api/pivot-query", tags=["pivot-query"])
+
+XLSX_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.post("", response_model=PivotQueryResponse)
@@ -61,3 +65,53 @@ def pivot_query_endpoint(
         )
 
     return crud.pivot_query.query_pivot(db, req)
+
+
+# ==================== v0.5.8 Excel 导出 ====================
+
+
+@router.post("/export")
+def pivot_export_endpoint(
+    req: PivotQueryRequest,
+    db=Depends(get_db),
+):
+    """把透视查询结果导出为 .xlsx（sheet 1「透视结果」+ sheet 2「查询参数快照」）。
+
+    Body 与 `POST /api/pivot-query` 完全一致；Pydantic 校验复用同一 schema。
+
+    文件名：`pivot_{pivot_type}_{YYYYMMDD_HHMMSS}.xlsx`，纯 ASCII。
+
+    参数:
+        req: 透视查询请求体（Body）。
+        db: FastAPI 注入的数据库 Session。
+
+    返回:
+        StreamingResponse: xlsx 二进制流 + `Content-Disposition: attachment; filename="..."`。
+
+    异常:
+        HTTPException 422: Pydantic 级联校验失败 / 笛卡尔积超限 /
+            `demand_plus_supply` 多 version_date。
+        HTTPException 500: SQLAlchemy / pandas / openpyxl 异常。
+    """
+    estimated = crud.pivot_query.estimate_size(db, req)
+    if estimated > crud.pivot_query.MAX_CARTESIAN:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"cartesian product estimated {estimated} rows exceeds limit "
+                f"{crud.pivot_query.MAX_CARTESIAN}; please narrow business row "
+                f"filters or date range"
+            ),
+        )
+
+    resp = crud.pivot_query.query_pivot(db, req)
+    content = build_pivot_xlsx(req, resp)
+    filename = f"pivot_{req.pivot_type}_{_export_timestamp()}.xlsx"
+    return StreamingResponse(
+        iter([content]),
+        media_type=XLSX_CT,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(content)),
+        },
+    )

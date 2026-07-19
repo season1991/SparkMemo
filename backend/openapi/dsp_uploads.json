@@ -1,521 +1,18 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "SparkMemo — Weekly Demand Management",
-    "version": "0.5.6",
-    "description": "周需求管理模块 OpenAPI（v0.5.6）。\n\nv0.5.1: DSP upload POST requires 4 form fields.\nv0.5.4: module rename → 周需求管理; GET /api/dsp-uploads gains 4 optional filter params; cascade dropdown endpoints added.\nv0.5.5: DspUploadRowRead adds config_name field.\nv0.5.6: see pivot_query.json for /api/pivot-query endpoints."
+    "title": "SparkMemo",
+    "version": "0.4.0"
   },
   "paths": {
-    "/api/companies": {
+    "/api/dsp-uploads/vendors": {
       "get": {
         "tags": [
-          "companies"
+          "dsp-uploads"
         ],
-        "summary": "List Companies",
-        "description": "获取公司列表，支持名称模糊搜索和分页。",
-        "operationId": "list_companies_api_companies_get",
-        "parameters": [
-          {
-            "name": "keyword",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Keyword"
-            }
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1,
-              "title": "Page"
-            }
-          },
-          {
-            "name": "size",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 20,
-              "title": "Size"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompanyListResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "companies"
-        ],
-        "summary": "Create Company",
-        "description": "创建公司，name 必填且全表唯一。",
-        "operationId": "create_company_api_companies_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompanyCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompanyRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/companies/{company_id}": {
-      "get": {
-        "tags": [
-          "companies"
-        ],
-        "summary": "Get Company",
-        "description": "获取公司详情，不存在返回 404。",
-        "operationId": "get_company_api_companies__company_id__get",
-        "parameters": [
-          {
-            "name": "company_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Company Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompanyRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "companies"
-        ],
-        "summary": "Update Company",
-        "description": "更新公司名称和备注。",
-        "operationId": "update_company_api_companies__company_id__put",
-        "parameters": [
-          {
-            "name": "company_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Company Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompanyUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompanyRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "companies"
-        ],
-        "summary": "Delete Company",
-        "description": "删除公司，被项目或任务引用时返回 409。",
-        "operationId": "delete_company_api_companies__company_id__delete",
-        "parameters": [
-          {
-            "name": "company_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Company Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/projects": {
-      "get": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "List Projects",
-        "description": "获取项目列表，支持按公司筛选和名称模糊搜索。",
-        "operationId": "list_projects_api_projects_get",
-        "parameters": [
-          {
-            "name": "company_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Company Id"
-            }
-          },
-          {
-            "name": "keyword",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Keyword"
-            }
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1,
-              "title": "Page"
-            }
-          },
-          {
-            "name": "size",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 20,
-              "title": "Size"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectListResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "Create Project",
-        "description": "创建项目，company_id 缺失返回 400，无效返回 422，重名返回 409。",
-        "operationId": "create_project_api_projects_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/projects/{project_id}": {
-      "get": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "Get Project",
-        "description": "获取项目详情，不存在返回 404。",
-        "operationId": "get_project_api_projects__project_id__get",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "Update Project",
-        "description": "更新项目全部字段。",
-        "operationId": "update_project_api_projects__project_id__put",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "Delete Project",
-        "description": "删除项目。",
-        "operationId": "delete_project_api_projects__project_id__delete",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/task-types": {
-      "get": {
-        "tags": [
-          "task-types"
-        ],
-        "summary": "List Task Types",
-        "description": "获取全量任务类型列表，不分页。",
-        "operationId": "list_task_types_api_task_types_get",
+        "summary": "Get Vendors Endpoint",
+        "description": "返回所有去重的 vendor 值（按字母升序），供查询/删除页下拉使用。\n\n返回:\n    list[str]: 去重后的 vendor 列表。\n\n异常:\n    无业务异常。",
+        "operationId": "get_vendors_endpoint_api_dsp_uploads_vendors_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -523,52 +20,10 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/TaskTypeRead"
+                    "type": "string"
                   },
                   "type": "array",
-                  "title": "Response List Task Types Api Task Types Get"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "task-types"
-        ],
-        "summary": "Create Task Type",
-        "description": "创建任务类型，name 全表唯一。",
-        "operationId": "create_task_type_api_task_types_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "type": "object",
-                "title": "Payload"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskTypeRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "title": "Response Get Vendors Endpoint Api Dsp Uploads Vendors Get"
                 }
               }
             }
@@ -576,23 +31,25 @@
         }
       }
     },
-    "/api/task-types/{task_type_id}": {
+    "/api/dsp-uploads/items": {
       "get": {
         "tags": [
-          "task-types"
+          "dsp-uploads"
         ],
-        "summary": "Get Task Type",
-        "description": "获取任务类型详情，不存在返回 404。",
-        "operationId": "get_task_type_api_task_types__task_type_id__get",
+        "summary": "Get Items Endpoint",
+        "description": "返回指定 vendor 下所有去重的 item 值（按字母升序）。\n\n参数:\n    vendor: 供应商；必填。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    list[str]: 去重后的 item 列表。\n\n异常:\n    无业务异常。",
+        "operationId": "get_items_endpoint_api_dsp_uploads_items_get",
         "parameters": [
           {
-            "name": "task_type_id",
-            "in": "path",
+            "name": "vendor",
+            "in": "query",
             "required": true,
             "schema": {
-              "type": "integer",
-              "title": "Task Type Id"
-            }
+              "type": "string",
+              "description": "供应商（必填，精确匹配）",
+              "title": "Vendor"
+            },
+            "description": "供应商（必填，精确匹配）"
           }
         ],
         "responses": {
@@ -601,97 +58,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskTypeRead"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Get Items Endpoint Api Dsp Uploads Items Get"
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "task-types"
-        ],
-        "summary": "Update Task Type",
-        "description": "更新任务类型名称。",
-        "operationId": "update_task_type_api_task_types__task_type_id__put",
-        "parameters": [
-          {
-            "name": "task_type_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Type Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Payload"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskTypeRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "task-types"
-        ],
-        "summary": "Delete Task Type",
-        "description": "删除任务类型，被任务引用时返回 409。",
-        "operationId": "delete_task_type_api_task_types__task_type_id__delete",
-        "parameters": [
-          {
-            "name": "task_type_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Type Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -706,159 +80,36 @@
         }
       }
     },
-    "/api/tasks": {
+    "/api/dsp-uploads/sub-items": {
       "get": {
         "tags": [
-          "tasks"
+          "dsp-uploads"
         ],
-        "summary": "List Tasks",
-        "description": "获取任务列表，支持多条件过滤和 remind_today 实时筛选。",
-        "operationId": "list_tasks_api_tasks_get",
+        "summary": "Get Sub Items Endpoint",
+        "description": "返回指定 vendor + item 下所有去重的 sub_item 值（按字母升序）。\n\n参数:\n    vendor: 供应商；必填。\n    item: 业务项；必填。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    list[str]: 去重后的 sub_item 列表。\n\n异常:\n    无业务异常。",
+        "operationId": "get_sub_items_endpoint_api_dsp_uploads_sub_items_get",
         "parameters": [
           {
-            "name": "status",
+            "name": "vendor",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
+              "type": "string",
+              "description": "供应商（必填）",
+              "title": "Vendor"
+            },
+            "description": "供应商（必填）"
           },
           {
-            "name": "company_id",
+            "name": "item",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Company Id"
-            }
-          },
-          {
-            "name": "project_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Project Id"
-            }
-          },
-          {
-            "name": "task_type_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Task Type Id"
-            }
-          },
-          {
-            "name": "due_from",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Due From"
-            }
-          },
-          {
-            "name": "due_to",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Due To"
-            }
-          },
-          {
-            "name": "keyword",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Keyword"
-            }
-          },
-          {
-            "name": "remind_today",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Remind Today"
-            }
-          },
-          {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 1,
-              "title": "Page"
-            }
-          },
-          {
-            "name": "size",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 20,
-              "title": "Size"
-            }
+              "type": "string",
+              "description": "业务项（必填）",
+              "title": "Item"
+            },
+            "description": "业务项（必填）"
           }
         ],
         "responses": {
@@ -867,46 +118,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskListResponse"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Get Sub Items Endpoint Api Dsp Uploads Sub Items Get"
                 }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "tasks"
-        ],
-        "summary": "Create Task",
-        "description": "创建任务：校验必填 + 翻译 remind_rule -> remind_start_at + 外键存在性。",
-        "operationId": "create_task_api_tasks_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           },
@@ -923,147 +140,47 @@
         }
       }
     },
-    "/api/tasks/{task_id}": {
+    "/api/dsp-uploads/version-dates": {
       "get": {
         "tags": [
-          "tasks"
+          "dsp-uploads"
         ],
-        "summary": "Get Task",
-        "description": "获取任务详情，含实时计算的提醒计划。",
-        "operationId": "get_task_api_tasks__task_id__get",
+        "summary": "Get Version Dates Endpoint",
+        "description": "返回指定 vendor + item + sub_item 下所有去重的 version_date 值（按日期降序）。\n\n参数:\n    vendor: 供应商；必填。\n    item: 业务项；必填。\n    sub_item: 子业务项；必填。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    list[str]: 去重后的 version_date 列表（YYYY-MM-DD 格式，最新日期排在前面）。\n\n异常:\n    无业务异常。",
+        "operationId": "get_version_dates_endpoint_api_dsp_uploads_version_dates_get",
         "parameters": [
           {
-            "name": "task_id",
-            "in": "path",
+            "name": "vendor",
+            "in": "query",
             "required": true,
             "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+              "type": "string",
+              "description": "供应商（必填）",
+              "title": "Vendor"
+            },
+            "description": "供应商（必填）"
           },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "tasks"
-        ],
-        "summary": "Update Task",
-        "description": "更新任务全部字段；remind_rule + due_at 一并提交后由后端翻译回 remind_start_at。",
-        "operationId": "update_task_api_tasks__task_id__put",
-        "parameters": [
           {
-            "name": "task_id",
-            "in": "path",
+            "name": "item",
+            "in": "query",
             "required": true,
             "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TaskUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+              "type": "string",
+              "description": "业务项（必填）",
+              "title": "Item"
+            },
+            "description": "业务项（必填）"
           },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "tasks"
-        ],
-        "summary": "Delete Task",
-        "description": "删除任务。",
-        "operationId": "delete_task_api_tasks__task_id__delete",
-        "parameters": [
           {
-            "name": "task_id",
-            "in": "path",
+            "name": "sub_item",
+            "in": "query",
             "required": true,
             "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/tasks/{task_id}/complete": {
-      "post": {
-        "tags": [
-          "tasks"
-        ],
-        "summary": "Complete Task",
-        "description": "标记任务为 completed，仅允许 pending → completed 跃迁。",
-        "operationId": "complete_task_api_tasks__task_id__complete_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
+              "type": "string",
+              "description": "子业务项（必填）",
+              "title": "Sub Item"
+            },
+            "description": "子业务项（必填）"
           }
         ],
         "responses": {
@@ -1071,131 +188,13 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Get Version Dates Endpoint Api Dsp Uploads Version Dates Get"
                 }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dashboard/today": {
-      "get": {
-        "tags": [
-          "dashboard"
-        ],
-        "summary": "Get Dashboard Today",
-        "description": "今日概述：返回 today + summary + companies[]。\n\n- today: 服务端通过 scheduler.get_today() 取当前日期（与 check_overdue_tasks 同源）。\n- summary: 由 companies[] 在 Python 层求和得到，保持唯一真理源，避免 SQL 与 Python 双源。\n- companies: 由 crud.dashboard 单次聚合 SQL 返回，包含所有公司（0 任务也列出）。",
-        "operationId": "get_dashboard_today_api_dashboard_today_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DashboardTodayResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/email-config": {
-      "get": {
-        "tags": [
-          "email-config"
-        ],
-        "summary": "Get Email Config Endpoint",
-        "description": "取当前邮箱配置；未配置返回 exists=false + 业务字段 null/false。",
-        "operationId": "get_email_config_endpoint_api_email_config_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailConfigRead"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "email-config"
-        ],
-        "summary": "Upsert Email Config Endpoint",
-        "description": "upsert 单行配置。\n\n- smtp_password 留空字符串或 None 视为「保留旧值」；\n- send_time / active 每次 PUT 显式覆盖；\n- 字段校验失败由 app 级 RequestValidationError 处理器映射为 400（见 main.py）。",
-        "operationId": "upsert_email_config_endpoint_api_email_config_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmailConfigWrite"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailConfigRead"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/email/send-test": {
-      "post": {
-        "tags": [
-          "email"
-        ],
-        "summary": "Send Test Email",
-        "description": "测试发送：先自动保存入参配置（等价于 PUT /api/email-config），\n再发送一封固定模板的连通性测试邮件。\n\n不受 active 开关约束：纯连通性验证。",
-        "operationId": "send_test_email_api_email_send_test_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmailConfigWrite"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           },
@@ -1218,7 +217,7 @@
           "dsp-uploads"
         ],
         "summary": "List Uploads Endpoint",
-        "description": "批次列表（按 id 倒序）。\n\n参数:\n    page: 页码（从 1 开始，默认 1）。\n    size: 每页条数（1-100，默认 20）。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    DspUploadListResponse: 含 `items`（批次列表）、`total`、`page`、`size` 的分页信封。\n\n异常:\n    无业务异常。SQLAlchemy 出错时由 FastAPI 兜底为 500。",
+        "description": "批次列表（按 id 倒序），v0.5.4 起支持 4 个可选 filter 参数。\n\n参数:\n    page: 页码（从 1 开始，默认 1）。\n    size: 每页条数（1-100，默认 20）。\n    vendor: 可选过滤；相等匹配；与 item/sub_item/version_date 组合为 AND。\n    item: 可选过滤。\n    sub_item: 可选过滤。\n    version_date: 可选过滤；`YYYY-MM-DD` 10 字符字符串；相等匹配。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    DspUploadListResponse: 含 `items`（批次列表）、`total`、`page`、`size` 的分页信封。\n\n异常:\n    无业务异常。SQLAlchemy 出错时由 FastAPI 兜底为 500。",
         "operationId": "list_uploads_endpoint_api_dsp_uploads_get",
         "parameters": [
           {
@@ -1248,11 +247,14 @@
             "name": "vendor",
             "in": "query",
             "required": false,
-            "description": "可选过滤：精确匹配 vendor（大小写敏感）",
             "schema": {
               "anyOf": [
-                { "type": "string" },
-                { "type": "null" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
               "title": "Vendor"
             }
@@ -1261,11 +263,14 @@
             "name": "item",
             "in": "query",
             "required": false,
-            "description": "可选过滤：精确匹配 item",
             "schema": {
               "anyOf": [
-                { "type": "string" },
-                { "type": "null" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
               "title": "Item"
             }
@@ -1274,11 +279,14 @@
             "name": "sub_item",
             "in": "query",
             "required": false,
-            "description": "可选过滤：精确匹配 sub_item",
             "schema": {
               "anyOf": [
-                { "type": "string" },
-                { "type": "null" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
               "title": "Sub Item"
             }
@@ -1287,11 +295,14 @@
             "name": "version_date",
             "in": "query",
             "required": false,
-            "description": "可选过滤：精确匹配 version_date（YYYY-MM-DD）",
             "schema": {
               "anyOf": [
-                { "type": "string" },
-                { "type": "null" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
               "title": "Version Date"
             }
@@ -1325,7 +336,7 @@
           "dsp-uploads"
         ],
         "summary": "Upload Endpoint",
-        "description": "接收 multipart/form-data 上传：file + 4 个业务字段。\n\n业务字段约定（v0.5.1 升级）：\n- `vendor / item / sub_item` 由前端解析文件名后填写、并允许用户在 UI 内修改后再 POST；\n- 后端**不再**从 `file.filename` 回退解析——这意味着 v0.5 引入的 `parse_filename` 函数降级为冗余 / 备用工具，仅供脚本或命令行调试使用；\n- 缺这 4 个字段中任一项 → 由 FastAPI 自动 422。\n\n处理顺序：\n1. 校验 version_date 格式 → 400（缺字段由 FastAPI 在更早阶段 422）\n2. 校验 MIME / size → 415 / 413\n3. 读取字节流到内存 → parse_excel\n4. 重传冲突检测 → 409\n5. INSERT 批次元数据 → bulk INSERT 事实行\n\n参数:\n    file: 浏览器上传的 `.xlsx` 文件；MIME 必须为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。\n    vendor: 供应商；1-64 字符；由前端解析/编辑后传入。\n    item: 业务项；1-128 字符；由前端解析/编辑后传入。\n    sub_item: 子业务项；1-128 字符；由前端解析/编辑后传入。\n    version_date: 用户输入的批次版本日期，10 字符 `YYYY-MM-DD`。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    DspUploadRead: 新建批次的元数据响应（含 vendor / item / sub_item / version_date / row_count / created_at）。\n\n异常:\n    HTTPException 400: version_date 非法 / quantity 非数字或非整数浮点。\n    HTTPException 413: 文件 > 20 MB。\n    HTTPException 415: MIME 不是 .xlsx。\n    HTTPException 422: Sheet `DSP` 不存在；或任一必填 Form 字段缺失。\n    HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。",
+        "description": "接收 multipart/form-data 上传：file + 4 个业务字段。\n\n业务字段约定（v0.5.1 升级）：\n- `vendor / item / sub_item` 由前端解析文件名后填写、并允许用户在 UI 内修改后再 POST；\n- 后端**不再**从 `file.filename` 回退解析——这意味着 v0.5 引入的 `parse_filename` 函数降级为冗余 / 备用工具，仅供脚本或命令行调试使用；\n- 缺这 4 个字段中任一项 → 由 FastAPI 自动 422。\n\n处理顺序：\n1. 校验 version_date 格式 → 400（缺字段由 FastAPI 在更早阶段 422）\n2. 校验 MIME / size → 415 / 413\n3. 读取字节流到内存 → parse_excel\n4. 重传冲突检测 → 409\n5. INSERT 批次元数据 → bulk INSERT 事实行\n\n参数:\n    file: 浏览器上传的 `.xlsx` 文件；MIME 必须为 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。\n    vendor: 供应商；1-64 字符；由前端解析/编辑后传入。\n    item: 业务项；1-128 字符；由前端解析/编辑后传入。\n    sub_item: 子业务项；1-128 字符；由前端解析/编辑后传入。\n    version_date: 用户输入的批次版本日期，10 字符 `YYYY-MM-DD`。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    DspUploadRead: 新建批次的元数据响应（含 vendor / item / sub_item / version_date / row_count / created_at）。\n\n异常:\n    HTTPException 400: version_date 非法 / quantity 非数字或非整数浮点。\n    HTTPException 413: 文件 > 20 MB。\n    HTTPException 415: MIME 不是 .xlsx。\n    HTTPException 422: Sheet `DSP` 不存在；任一必填 Form 字段缺失；Excel 行 1 缺失关键列（country/category/config_code/data_type/ttl 中任一列）。\n    HTTPException 409: 同 (vendor, item, sub_item, version_date) 已存在；detail 含现有 upload_id。",
         "operationId": "upload_endpoint_api_dsp_uploads_post",
         "requestBody": {
           "required": true,
@@ -1355,169 +366,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dsp-uploads/vendors": {
-      "get": {
-        "tags": [
-          "dsp-uploads"
-        ],
-        "summary": "Get Vendors Endpoint",
-        "description": "返回所有去重的 vendor 值（按字母升序），供查询/删除/透视查询页下拉使用。",
-        "operationId": "get_vendors_endpoint_api_dsp_uplods_vendors_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "title": "Response Get Vendors"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dsp-uploads/items": {
-      "get": {
-        "tags": [
-          "dsp-uploads"
-        ],
-        "summary": "Get Items Endpoint",
-        "description": "返回指定 vendor 下所有去重的 item 值（按字母升序）。",
-        "operationId": "get_items_endpoint_api_dsp_uplods_items_get",
-        "parameters": [
-          {
-            "name": "vendor",
-            "in": "query",
-            "required": true,
-            "description": "供应商（必填，精确匹配）",
-            "schema": { "type": "string", "title": "Vendor" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "title": "Response Get Items"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dsp-uploads/sub-items": {
-      "get": {
-        "tags": [
-          "dsp-uploads"
-        ],
-        "summary": "Get Sub Items Endpoint",
-        "description": "返回指定 vendor + item 下所有去重的 sub_item 值（按字母升序）。",
-        "operationId": "get_sub_items_endpoint_api_dsp_uplods_sub_items_get",
-        "parameters": [
-          {
-            "name": "vendor",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Vendor" }
-          },
-          {
-            "name": "item",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Item" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "title": "Response Get Sub Items"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dsp-uploads/version-dates": {
-      "get": {
-        "tags": [
-          "dsp-uploads"
-        ],
-        "summary": "Get Version Dates Endpoint",
-        "description": "返回指定 vendor + item + sub_item 下所有去重的 version_date 值（按日期降序）。",
-        "operationId": "get_version_dates_endpoint_api_dsp_uplods_version_dates_get",
-        "parameters": [
-          {
-            "name": "vendor",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Vendor" }
-          },
-          {
-            "name": "item",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Item" }
-          },
-          {
-            "name": "sub_item",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Sub Item" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "title": "Response Get Version Dates"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
               }
             }
           }
@@ -1651,6 +499,47 @@
                 "schema": {
                   "$ref": "#/components/schemas/DspUploadRowListResponse"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dsp-uploads/{upload_id}/rows/export": {
+      "get": {
+        "tags": [
+          "dsp-uploads"
+        ],
+        "summary": "Rows Export Endpoint",
+        "description": "导出指定批次的全部事实行为 .xlsx（不分页）。\n\n文件名：`dsp_upload_{id}_rows_{YYYYMMDD_HHMMSS}.xlsx`，纯 ASCII。\n\n参数:\n    upload_id: 批次主键。\n    db: FastAPI 注入的数据库 Session。\n\n返回:\n    StreamingResponse: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`\n    二进制流 + `Content-Disposition: attachment; filename=\"...\"`。\n\n异常:\n    HTTPException 404: 批次不存在。\n    HTTPException 422: 事实行数 > `MAX_DSP_EXPORT_ROWS`（默认 200_000）。\n    HTTPException 500: pandas / openpyxl 等运行时异常。",
+        "operationId": "rows_export_endpoint_api_dsp_uploads__upload_id__rows_export_get",
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Upload Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -2356,6 +1245,293 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "PivotQueryRequest": {
+        "properties": {
+          "pivot_type": {
+            "type": "string",
+            "enum": [
+              "demand",
+              "demand_plus_supply"
+            ],
+            "title": "Pivot Type",
+            "default": "demand"
+          },
+          "vendor": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Vendor"
+          },
+          "item": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Item"
+          },
+          "sub_item": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Sub Item"
+          },
+          "version_dates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Version Dates"
+          },
+          "countries": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Countries"
+          },
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categories"
+          },
+          "config_codes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Codes"
+          },
+          "config_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Names"
+          },
+          "years": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Years"
+          },
+          "months": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Months"
+          },
+          "weeks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weeks"
+          },
+          "expand_to_daily": {
+            "type": "boolean",
+            "title": "Expand To Daily",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "vendor",
+          "item",
+          "sub_item",
+          "version_dates"
+        ],
+        "title": "PivotQueryRequest",
+        "description": "透视查询请求体。\n\n入参分四组：\n1. 必填定位：`pivot_type` / `vendor` / `item` / `sub_item` / `version_dates`\n   - `pivot_type='demand'`：1-20 个 version_dates（多选）\n   - `pivot_type='demand_plus_supply'`：仅 1 个 version_date（单选，超限 → 422）\n2. 横向业务行筛选（可选）：`countries` / `categories` / `config_codes` / `config_names`\n   - **严格级联**：`config_names` 提供 → 必须提供 `categories` → 必须提供 `countries`\n3. 纵向日期筛选（可选）：`years` / `months` / `weeks`\n   - **级联**：`weeks` 提供 → 必须同时提供 `months` 与 `years`\n   - **级联**：`months` 提供 → 必须提供 `years`\n   - **至少一个**：必须提供 `years` / `months` / `weeks` 其一\n4. 展示控制：`expand_to_daily`（默认 False = 按周；True = 按日）\n\n`pivot_type='demand'` 时固定注入 `data_type='Demand'` 过滤；\n`pivot_type='demand_plus_supply'` 时改为 `data_type IN ('Demand', 'Supply')`，并在响应中\nPython 层派生 `TTL_GAP` / `Rolling_TTLGAP` 两行（详见 spec §11）。"
+      },
+      "PivotQueryResponse": {
+        "properties": {
+          "period_columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Period Columns"
+          },
+          "row_groups": {
+            "items": {
+              "$ref": "#/components/schemas/PivotRow"
+            },
+            "type": "array",
+            "title": "Row Groups"
+          },
+          "total_rows": {
+            "type": "integer",
+            "title": "Total Rows"
+          },
+          "version_dates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Version Dates"
+          },
+          "date_granularity": {
+            "type": "string",
+            "enum": [
+              "week",
+              "day"
+            ],
+            "title": "Date Granularity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period_columns",
+          "row_groups",
+          "total_rows",
+          "version_dates",
+          "date_granularity"
+        ],
+        "title": "PivotQueryResponse",
+        "description": "透视查询响应。\n\n- `period_columns`：纵向展开成列头的日期列表（升序），前端用作表头\n- `row_groups`：横向分组的行列表，每行包含业务维度 + 各 period 的 quantity\n- `date_granularity`：标识返回的 period 是按周（\"week\"）还是按日（\"day\"）"
+      },
+      "PivotRow": {
+        "properties": {
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "config_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Code"
+          },
+          "config_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Name"
+          },
+          "data_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Type"
+          },
+          "ttl": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttl"
+          },
+          "version_date": {
+            "type": "string",
+            "title": "Version Date"
+          },
+          "quantities": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Quantities"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version_date",
+          "quantities"
+        ],
+        "title": "PivotRow",
+        "description": "透视表的一行（横向）：业务维度组合 + 多个版本日期的 quantity 列。\n\n`quantities` 字典的 key 是 `period_date`（按周为周起始日，按日为每天），\nvalue 是 quantity（缺失时由后端 COALESCE 为 0）。"
+      },
       "ProjectListResponse": {
         "properties": {
           "items": {
@@ -2821,6 +1997,25 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WeekInfo": {
+        "properties": {
+          "week_id": {
+            "type": "integer",
+            "title": "Week Id"
+          },
+          "week_start_date": {
+            "type": "string",
+            "title": "Week Start Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week_id",
+          "week_start_date"
+        ],
+        "title": "WeekInfo",
+        "description": "透视查询辅助：单条「ISO 周编号 + 周起始日（周一）」映射。\n\n- `week_id`：ISO 周编号（1-53）\n- `week_start_date`：该周周一的日期（YYYY-MM-DD）\n\n注：ISO 周历下，周一为一周的第一天；week_id 归属的「ISO 年」与 `week_start_date`\n的自然年可能不同（如 2025-W01 起始于 2024-12-30）。"
       }
     }
   }

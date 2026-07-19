@@ -138,3 +138,20 @@ export function getDistinctSubItems(vendor, item) {
 export function getDistinctVersionDates(vendor, item, sub_item) {
   return client.get('/dsp-uploads/version-dates', { params: { vendor, item, sub_item } })
 }
+
+
+// ==================== v0.5.8 Excel 导出 ====================
+
+
+/**
+ * 下载指定 batch 的事实行 .xlsx（v0.5.8 新增）。
+ *
+ * @param {number} id batch 主键
+ * @returns {Promise<Blob>} xlsx 二进制
+ */
+export function downloadDspRowsXlsx(id) {
+  return client.get(`/dsp-uploads/${id}/rows/export`, {
+    responseType: 'blob',
+    timeout: 60000,  // 大 batch 导出可能 > 10s 默认
+  })
+}
