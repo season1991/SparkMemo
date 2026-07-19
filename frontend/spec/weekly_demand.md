@@ -1,18 +1,29 @@
-# 周需求管理模块规格（前端，v0.5.6 — 新增「透视查询」子模块）
+# 周需求管理模块规格（前端，v0.5.7 — 透视查询激活 `demand_plus_supply` + 视觉分组）
 
 > 适配 OpenAPI：
-> - [../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.6`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead` / `DspUploadListResponse`）
-> - [../../backend/openapi/pivot_query.json](../../backend/openapi/pivot_query.json)（`info.version = 0.5.6`，路径 `/api/pivot-query`；schema `PivotQueryRequest` / `PivotQueryResponse` / `PivotRow` / `WeekInfo`）
-> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.6）
-> 前端实现版本：v0.5.6（v0.5.5 config_name 入库稳定；本轮新增透视查询子模块）
+> - [../../backend/openapi/dsp_uploads.json](../../backend/openapi/dsp_uploads.json)（`info.version = 0.5.7`，路径 `/api/dsp-uploads`；schema `DspUploadRead` / `DspUploadRowRead` / `DspUploadListResponse`）
+> - [../../backend/openapi/pivot_query.json](../../backend/openapi/pivot_query.json)（`info.version = 0.5.7`，路径 `/api/pivot-query`；schema `PivotQueryRequest` / `PivotQueryResponse` / `PivotRow` / `WeekInfo`）
+> 适配后端 spec：[../../backend/spec/weekly_demand.md](../../backend/spec/weekly_demand.md)（v0.5.7，含 §11 Demand+Supply 计算规则）
+> 前端实现版本：v0.5.7
 > 页面入口：
-> - Hub：`views/WeeklyDemandHub.vue`（路由 `/dsp-uploads`；v0.5.6 起含 4 张功能卡片）
+> - Hub：`views/WeeklyDemandHub.vue`（路由 `/dsp-uploads`；含 4 张功能卡片）
 > - 上传：`views/DspUpload.vue`（路由 `/dsp-uploads/upload`）
 > - 查询：`views/WeeklyDemandQuery.vue`（路由 `/dsp-uploads/query`）
 > - 删除：`views/WeeklyDemandDelete.vue`（路由 `/dsp-uploads/delete`）
-> - **透视查询**：`views/PivotQuery.vue`（路由 `/pivot-query`，v0.5.6 新增）
+> - 透视查询：`views/PivotQuery.vue`（路由 `/pivot-query`，v0.5.6 新增；v0.5.7 启用 `demand_plus_supply` + 行级视觉分组）
 > 全局规则遵循 [./README.md](./README.md)；本文档只描述本模块特有的页面拆解、功能点交互与测试案例。
 
+> **v0.5.7 前端侧变更**（摘要）：
+>
+> 1. **`pivot_type` 启用 `demand_plus_supply`**：透视查询页单选框移除 `:disabled`；选择后 `version_dates` 自动改为单选。
+> 2. **视觉分组（行级底色）**：1 组业务维度产出 4 行（Demand / Supply / TTL_GAP / Rolling_TTLGAP）；用三种 Element Plus 浅色 token 区分：
+>    - `Demand` + `Supply` → `#ecf5ff`（primary-light-9，原始数据组）
+>    - `TTL_GAP` → `#fdf6ec`（warning-light-9，单期派生）
+>    - `Rolling_TTLGAP` → `#fef0f0`（danger-light-9，累计派生）
+> 3. **负数 quantity 视觉强调**：仅 `TTL_GAP` / `Rolling_TTLGAP` 行单元格 `< 0` 时使用 `cell-negative`（加粗 + 红色 `#f56c6c`），其余 `data_type` 与 `Demand` 行为完全一致（零值灰、非零加粗深色）。
+> 4. **整行底色压制**：`el-table` hover 高亮需被 `:row-class-name` 注入的 css `!important` 压住。
+> 5. 测试计划 / 验证清单 / 修订记录同步更新（详见各章节）。
+>
 > **v0.5.6 前端侧变更**（摘要）：
 >
 > 1. **新增透视查询子模块**：独立路由 `/pivot-query`，对应 `views/PivotQuery.vue`。
@@ -46,7 +57,7 @@
 | `/dsp-uploads/upload` | `views/DspUpload.vue` | 周需求管理 | DSP 上传 | 上传文件（v0.5.3 行为沿用） |
 | `/dsp-uploads/query` | `views/WeeklyDemandQuery.vue` | 周需求管理 | 查询 | 按 4 字段精确查找已存在批次 + 事实行预览 |
 | `/dsp-uploads/delete` | `views/WeeklyDemandDelete.vue` | 周需求管理 | 删除 | 按 4 字段定位 → 预览 → 确认删除 |
-| `/pivot-query` | `views/PivotQuery.vue` | 周需求管理 | 透视查询 | **v0.5.6 新增**：OLAP 透视查询，横向业务行 × 纵向日期 × 交叉点 quantity |
+| `/pivot-query` | `views/PivotQuery.vue` | 周需求管理 | 透视查询 | v0.5.6 新增；v0.5.7 启用 `demand_plus_supply` + 行级视觉分组（详情见 §2.11.x）|
 
 ### 1.2 侧边栏（v0.5.1 在「任务管理」与「邮箱配置」之间插入「DSP 上传」）
 
@@ -138,7 +149,7 @@
 | View | `views/DspUpload.vue` | DSP 上传子功能（v0.5.3 行为沿用；路由迁到 `/dsp-uploads/upload`） |
 | View | `views/WeeklyDemandQuery.vue` | **v0.5.4 新增** 查询子功能：4 字段 form + 查询按钮 + 元数据 + 前 50 条事实行预览 |
 | View | `views/WeeklyDemandDelete.vue` | **v0.5.4 新增** 删除子功能：4 字段 form + 「查询预览」按钮 + 「删除」按钮（带 `ElMessageBox.confirm`） |
-| View | `views/PivotQuery.vue` | **v0.5.6 新增** 透视查询：三组筛选（必填定位 + 业务行级联 + 时间维度）+ OLAP 透视表 |
+| View | `views/PivotQuery.vue` | v0.5.6 新增 / v0.5.7 视觉分组：透视查询（三组筛选 + 一张 OLAP 透视表；启用 `demand_plus_supply` 后按 4 行/组 + 三色行级底色 + 负数 cell 红色突出）|
 | Store（共享） | `stores/useDspUploadStore.js` | state（selectedFile / form / initialParsed / uploading / uploadResult / rows / rowsTotal / rowsPage / rowsSize / error）+ actions（**v0.5.2** `selectFile / updateMeta / submitUpload / loadResultRows / reset / replaceAndUpload` + **v0.5.4** `queryBatch / deleteBatch`）+ getters（hasFile / hasResult / hasEditedMeta / canSubmit） |
 | Store（新增 query-only） | `stores/useDspQueryStore.js` | **v0.5.4 新增** 仅管查询：state（form / queriedBatch / queryRows / querying / error）+ action `runQuery(form)` |
 | Store（新增 delete-only） | `stores/useDspDeleteStore.js` | **v0.5.4 新增** 仅管删除：state（form / preview / deleting / error）+ actions `loadPreview(form)` / `confirmDelete(preview)` |
@@ -349,9 +360,17 @@
 
 筛选区共 4 行：
 1. **必填定位行**：vendor → item → sub_item 三级级联下拉（复用 `dsp_uploads.js` 的 `getDistinctVendors / getDistinctItems / getDistinctSubItems`）；选中后联动加载后续下拉。
-2. **版本日期 + 透视类型 + 日期粒度行**：version_dates 多选（复用 `getDistinctVersionDates`）；pivot_type 单选（v0.5.6 固定 `demand`，`demand_plus_supply` disabled）；日期粒度单选（按周 / 按日）。
+2. **版本日期 + 透视类型 + 日期粒度行**：version_dates 多选（复用 `getDistinctVersionDates`）；pivot_type 单选（v0.5.7 起支持 `demand` 与 `demand_plus_supply` 两个选项；`demand_plus_supply` 模式下 version_dates 联动改为单选，详见 §2.11.2）；日期粒度单选（按周 / 按日）。
 3. **业务行筛选行**（`el-collapse` 折叠，可选）：countries → categories → config_names 三级级联多选（调 `lookupCountries / lookupCategories / lookupConfigNames`）。
 4. **时间维度行**：years（`el-date-picker type="year"` 单选，返回字符串如 `"2026"`，`form.years` 类型为 `string`，默认值为系统当前年份 `String(new Date().getFullYear())`）→ months（1-12 下拉多选）→ weeks（联动 years+months，调 `lookupWeeksOfMonth`）；至少选一个时间维度。
+
+> **v0.5.7 视觉分组总览**：详情见 §2.11.3 / §2.11.4。本节只声明需求，下文子章节展开。
+>
+> 1 组业务维度 → 4 行（Demand / Supply / TTL_GAP / Rolling_TTLGAP）；多组业务维度 → 连续 4 行一组。
+> - 行底色：`Demand + Supply` 用 `#ecf5ff`；`TTL_GAP` 用 `#fdf6ec`；`Rolling_TTLGAP` 用 `#fef0f0`。
+> - cell 字体：负数仅 `TTL_GAP` / `Rolling_TTLGAP` 行触发（加粗 + 红色 `#f56c6c`）。
+>
+> 实现位于 `views/PivotQuery.vue`：`getRowClass(row)` 返回 `row--ds-base` / `row--ttl-gap` / `row--rolling`；`getCellClass(row, pd)` 命中负数返回 `cell-negative`。
 
 #### 交互逻辑
 
@@ -395,6 +414,126 @@
 | 表头 | 结果卡 header 显示：`✓ 查询结果` + tag（N 行 / M 个日期列 / K 个版本 / 按周/按日） |
 | 空数据 | `total_rows === 0` → 居中提示「该筛选条件下无匹配数据。请缩小筛选范围或选择其他时间维度。」 |
 | 滚动 | `el-table` 固定 `height="600"`，水平溢出 `overflow-x: auto` |
+| **v0.5.7 新**：行级底色 / 行级 class | 详见 §2.11.3 |
+| **v0.5.7 新**：cell 字体规则（含负数突出） | 详见 §2.11.4 |
+
+#### 2.11.1 pivot_type 选项启用（v0.5.7 新）
+
+| 阶段 | 内容 |
+|------|------|
+| 选项卡 | `<el-radio-group v-model="form.pivot_type">` 内含两个 `<el-radio-button>`：<br>• `value="demand"` 标签「Demand」<br>• `value="demand_plus_supply"` 标签「Demand+Supply」（v0.5.7 起**可点击**，移除 `:disabled="true"`） |
+| watch pivot_type 切换 | 通过 `@change` 或 `watch(form, 'pivot_type')` 处理：<br>1) 清空 `result.value = null`<br>2) 切到 `demand_plus_supply` 时执行 §2.11.2 的 version_dates 单选联动<br>3) 切回 `demand` 时恢复多选（已选中的版本日期保留） |
+| Toast（运行中选项切换） | 「已切换到 Demand+Supply 模式」/「已切换到 Demand 模式」（仅当已成功查询过 result 后切换）|
+| 失败逻辑 | — |
+
+> 注意：v0.5.7 之前 `el-radio-button value="demand_plus_supply" :disabled="true"`；本版本起无条件启用。
+
+#### 2.11.2 version_dates 单选联动（v0.5.7 新）
+
+后端 spec §11.1 约束 `pivot_type='demand_plus_supply'` 时 `version_dates` 仅允许 1 个；前端通过 UI 引导避免触发 422：
+
+| 触发 | 行为 |
+|------|------|
+| 切到 `demand_plus_supply` 且已选 0 个 | `version_dates` 控件切到单选模式（`el-select :multiple="false"`）；用户照常选 |
+| 切到 `demand_plus_supply` 且已选 1 个 | 控件切单选，已选项保留 |
+| 切到 `demand_plus_supply` 且已选 ≥ 2 个 | toast「Demand+Supply 模式仅支持单个版本日期，请重新选择」；**保留控件里所有已选项 + 仍切单选**；在控件旁显示 `<el-alert type="warning" :closable="false">`「请缩减到 1 个版本日期」直到用户修正；查询按钮在修正前 `disabled` |
+| 切回 `demand` | 控件恢复多选；超 1 个的版本日期保留（不影响 demand 模式） |
+
+实现要点：
+- 控件 `:multiple="form.pivot_type === 'demand'"`（v0.5.7 起变为动态）
+- 计算属性 `versionDatesExceedsOne` = `form.pivot_type === 'demand_plus_supply' && form.version_dates.length > 1`
+- 表单校验 `canQuery` 在 `versionDatesExceedsOne` 为 true 时返回 false
+- `<el-form-item>` 显示上方 `<el-alert>` 提示（与现有 `cascadeHint` 风格一致）
+
+#### 2.11.3 视觉分组规范 — 行级底色（v0.5.7 新）
+
+**目的**：让用户扫一眼透视表就能识别 4 行属于哪一类：
+
+| `row.data_type` | 行级 class | 颜色（Element Plus token） | 含义 |
+|---|---|---|---|
+| `'Demand'` | `row--ds-base` | `#ecf5ff`（`--el-color-primary-light-9`） | 原始数据组 |
+| `'Supply'` | `row--ds-base` | `#ecf5ff` | 原始数据组（与 Demand 同色，强调"配对"语义）|
+| `'TTL_GAP'` | `row--ttl-gap` | `#fdf6ec`（`--el-color-warning-light-9`） | 单期派生指标 |
+| `'Rolling_TTLGAP'` | `row--rolling` | `#fef0f0`（`--el-color-danger-light-9`） | 累计派生指标 |
+
+实现：
+
+```js
+// PivotQuery.vue script setup
+function getRowClass({ row }) {
+  if (row.data_type === 'TTL_GAP') return 'row--ttl-gap'
+  if (row.data_type === 'Rolling_TTLGAP') return 'row--rolling'
+  return 'row--ds-base'  // Demand / Supply
+}
+```
+
+```vue
+<el-table
+  :data="result.row_groups"
+  :row-class-name="getRowClass"
+  stripe   ← v0.5.7: stripe 与 row-class-name 互不冲突；保留 stripe 提供浅灰行间分隔
+  ...
+>
+```
+
+```css
+/* PivotQuery.vue <style scoped> — v0.5.7 追加 */
+/* 用 > td !important 压住 Element Plus 默认 hover 高亮 */
+.pivot-view .el-table__body tr.row--ds-base > td { background-color: #ecf5ff !important; }
+.pivot-view .el-table__body tr.row--ttl-gap > td { background-color: #fdf6ec !important; }
+.pivot-view .el-table__body tr.row--rolling > td { background-color: #fef0f0 !important; }
+.pivot-view .el-table__body tr.row--ttl-gap > td.zero-cell,
+.pivot-view .el-table__body tr.row--rolling > td.zero-cell,
+.pivot-view .el-table__body tr.row--ttl-gap > td.cell-negative,
+.pivot-view .el-table__body tr.row--rolling > td.cell-negative { color: inherit; }  /* cell 颜色仍由 cell 自身决定 */
+```
+
+> **悬停降级**：因底色已用 `!important`，鼠标 hover 时元素颜色保持不变（避免视觉跳动）。如未来需要 hover 信息，可在 `<tr>` 上加 `title` 属性。
+
+#### 2.11.4 cell 字体规则（v0.5.7 新）
+
+按 `data_type` × `quantity 符号` 决定 cell class：
+
+| `row.data_type` | `qty === 0` 或缺失 | `qty > 0` | `qty < 0` |
+|---|---|---|---|
+| Demand | `zero-cell`（灰 `#c0c4cc`）| `nonzero-cell`（加粗 `#303133`）| 不可能（Demand 行无负数）|
+| Supply | `zero-cell` | `nonzero-cell` | 不可能（Supply 行无负数）|
+| **TTL_GAP** | `zero-cell` | `nonzero-cell` | **`cell-negative`（加粗 `#f56c6c`）** ← 显眼 |
+| **Rolling_TTLGAP** | `zero-cell` | `nonzero-cell` | **`cell-negative`（加粗 `#f56c6c`）** ← 显眼 |
+
+实现：
+
+```js
+function getCellClass(row, periodDate) {
+  const v = cellQty(row, periodDate)  // 现有 helper
+  if (
+    v < 0 &&
+    (row.data_type === 'TTL_GAP' || row.data_type === 'Rolling_TTLGAP')
+  ) {
+    return 'cell-negative'
+  }
+  return v === 0 ? 'zero-cell' : 'nonzero-cell'
+}
+```
+
+```vue
+<template #default="slotProps">
+  <span :class="getCellClass(slotProps.row, pd)">
+    {{ cellQty(slotProps.row, pd) }}
+  </span>
+</template>
+```
+
+```css
+/* 保留 v0.5.6 原样式 */
+.zero-cell    { color: #c0c4cc; }
+.nonzero-cell { font-weight: 600; color: #303133; }
+
+/* v0.5.7 新增：负数强烈突出，仅 TTL_GAP / Rolling 命中 */
+.cell-negative { font-weight: 700; color: #f56c6c; }
+```
+
+> **Demand/Supply 与 TTL_GAP/Rolling 的非负值显示完全一致**（即沿用原 `nonzero-cell` / `zero-cell` 风格），保证视觉一致性与原 spec §5.4 颜色 token 不冲突。
 
 #### 按钮状态
 
@@ -419,6 +558,7 @@
 | 415 | 后端 detail「file must be .xlsx MIME type」| `ElMessage.error` |
 | 422 | 后端 detail「sheet 'DSP' not found」/ 必填字段缺失 | `ElMessage.error` |
 | 422 | 透视查询：Pydantic 级联校验失败 / 笛卡尔积预检超出 MAX_CARTESIAN(50000) | `showApiError(err)` → `ElMessage.error(detail)` |
+| 422 | **v0.5.7 透视查询**：`pivot_type='demand_plus_supply'` 时 `version_dates` 超过 1 个 | `showApiError(err)` 沿用；前端用 §2.11.2 预先 UI 引导避免触发 |
 | 500 | 透视查询：SQLAlchemy 异常（如 week_dt 表不存在） | `showApiError(err)` → `ElMessage.error(detail)` |
 | 5xx | 拦截器兜底 | `ElMessage.error('服务异常，请稍后重试')` |
 | 网络 | 拦截器兜底 | `ElMessage.error('网络异常，请稍后重试')` |
@@ -451,6 +591,9 @@
 | 透视查询 — 级联提示（weeks 缺 years+months） | 「已选择 weeks，请同时选择 years 与 months」 |
 | 透视查询 — 级联提示（months 缺 years） | 「已选择 months，请同时选择 years」 |
 | 透视查询 — 级联提示（无时间维度） | 「请至少选择一个时间维度（years / months / weeks）」 |
+| **v0.5.7 透视查询** — 切换到 Demand+Supply 模式（已查询过） | 「已切换到 Demand+Supply 模式」 |
+| **v0.5.7 透视查询** — 切换回 Demand 模式（已查询过） | 「已切换到 Demand 模式」 |
+| **v0.5.7 透视查询** — `demand_plus_supply` 下选了 >1 个版本日期 | toast「Demand+Supply 模式仅支持单个版本日期」 + 表单上方 `<el-alert>`「请缩减到 1 个版本日期」直到修正 |
 
 ---
 
@@ -542,6 +685,16 @@
 | cellQty 辅助 | `quantities[date]` 存在 → 返回值；不存在 → 0 |
 | 无数据 | `total_rows === 0` → 空提示文案 |
 | 重置 | 所有 form 字段清空；所有 options 清空；result 清空；重新加载 vendors |
+| **v0.5.7 新**：`pivot_type` radio 切换 | `demand_plus_supply` 单选框可点击（去除 `:disabled`）|
+| **v0.5.7 新**：切换到 `demand_plus_supply` 后 version_dates 控件变单选 | `el-select :multiple` 属性值为 `false`（按 `form.pivot_type === 'demand'` 计算）|
+| **v0.5.7 新**：切到 `demand_plus_supply` 时已选 ≥ 2 个版本日期 | 顶部 `<el-alert>` 出现，toast「Demand+Supply 模式仅支持单个版本日期」；查询按钮 `disabled` |
+| **v0.5.7 新**：`getRowClass` 对 Demand / Supply 行返回 `'row--ds-base'` | 行元素 class 含 `row--ds-base` |
+| **v0.5.7 新**：`getRowClass` 对 TTL_GAP 行返回 `'row--ttl-gap'` | 行元素 class 含 `row--ttl-gap` |
+| **v0.5.7 新**：`getRowClass` 对 Rolling_TTLGAP 行返回 `'row--rolling'` | 行元素 class 含 `row--rolling` |
+| **v0.5.7 新**：`getCellClass` 对 TTL_GAP 行的负数量返回 `'cell-negative'` | cell 元素 class 含 `cell-negative` |
+| **v0.5.7 新**：`getCellClass` 对 Rolling_TTLGAP 行的负数量返回 `'cell-negative'` | cell 元素 class 含 `cell-negative` |
+| **v0.5.7 新**：`getCellClass` 对 Demand / Supply 行的非负数量返回 `zero-cell` / `nonzero-cell`（不返回 `cell-negative`）| 行为完全沿用 v0.5.6 |
+| **v0.5.7 新**：行级 css 压制 hover | `.row--ttl-gap > td` 实际渲染背景色为 `#fdf6ec`（用 `getComputedStyle` 校验 `background-color`）|
 
 ---
 
@@ -553,11 +706,11 @@
 - el-upload 组件**没有采用** Element Plus 的 `<el-upload>` —— 直接用原生隐藏 `<input type="file">`，简化文件名校验与 store 联动；
 - 不引入拖拽上传（v0.5.2 仅点击触发）；
 - v0.5.2 起「重置」不再强制——选新文件即隐式重置；保留按钮作为手动清理入口；
-- **v0.5.6 新**：透视查询不实现 `pivot_type='demand_plus_supply'` 的具体行为（UI 上 disabled）；
-- **v0.5.6 新**：透视查询不实现结果缓存（每次查询重新请求）；
-- **v0.5.6 新**：透视查询不实现自定义排序（默认 `ORDER BY c.dt` 升序）；
-- **v0.5.6 新**：透视查询不实现结果分页（单次返回全部数据，硬上限通过笛卡尔积预检保证）；
-- **v0.5.6 新**：透视查询不实现跨版本 quantity 合并（每个 version_date 独立成行）。
+- **v0.5.6 / v0.5.7**：透视查询不实现结果缓存（每次查询重新请求）；
+- **v0.5.6 / v0.5.7**：透视查询不实现自定义排序（默认 `ORDER BY c.dt` 升序）；
+- **v0.5.6 / v0.5.7**：透视查询不实现结果分页（单次返回全部数据，硬上限通过笛卡尔积预检保证）；
+- **v0.5.6 / v0.5.7**：透视查询不实现跨版本 quantity 合并（每个 version_date 独立成行）；
+- **v0.5.7**：透视查询行级底色**不**随主题切换——硬编码 3 个十六进制色（`#ecf5ff` / `#fdf6ec` / `#fef0f0`）而非 `var(--el-color-*)`，避免 Element Plus 主题包变量未公开导致样式漂移；如未来切主题，需在 `<style>` 中改 token。
 
 ---
 
@@ -588,6 +741,15 @@
 - [x] 透视查询页：重置全清 + 重新加载 vendors
 - [x] 透视查询页：422 笛卡尔积超限 / 级联校验失败 → showApiError
 - [x] 透视查询页：cascadeHint 级联提示正确显示
+- [x] **v0.5.7**：透视查询页 `pivot_type` 单选可点击 `demand_plus_supply`（去除 `:disabled`）
+- [x] **v0.5.7**：切到 `demand_plus_supply` 后 `version_dates` 控件改为单选
+- [x] **v0.5.7**：切到 `demand_plus_supply` 前已选 ≥ 2 个版本日期时，顶部 `<el-alert>` 提示 + 查询按钮 disabled
+- [x] **v0.5.7**：Demand / Supply 行 `getComputedStyle().backgroundColor === 'rgb(236, 245, 255)'`（即 `#ecf5ff`）
+- [x] **v0.5.7**：TTL_GAP 行 `backgroundColor === 'rgb(253, 246, 236)'`（即 `#fdf6ec`）
+- [x] **v0.5.7**：Rolling_TTLGAP 行 `backgroundColor === 'rgb(254, 240, 240)'`（即 `#fef0f0`）
+- [x] **v0.5.7**：TTL_GAP 负数量 cell class 含 `cell-negative`，computed `color === 'rgb(245, 108, 108)'` + `fontWeight === '700'`
+- [x] **v0.5.7**：Rolling_TTLGAP 负数量 cell class 含 `cell-negative`
+- [x] **v0.5.7**：Demand / Supply 行非负 cell class 仅 `zero-cell` / `nonzero-cell`（无 `cell-negative`）
 
 ---
 
@@ -595,6 +757,15 @@
 
 | 版本 | 章节 | 修订 |
 |------|------|------|
+| **v0.5.7** | 头部 / §1.1 / §1.4 / §2.11 / §3 / §4 / §5.6 / §6 / §7 / §8 | **透视查询激活 `demand_plus_supply` + 行级视觉分组**：启用 `demand_plus_supply` 单选；version_dates 联动单选 + 顶端 `<el-alert>` 引导；4 行/组（Demand+Supply / TTL_GAP / Rolling_TTLGAP）行级底色（Element Plus 浅 token 3 色）；仅 TTL_GAP/Rolling 负数量 cell 加粗红色 `#f56c6c`；测试 / 验证清单同步更新；OpenAPI / 后端无改动 |
+| v0.5.7 | §2.11.1 | pivot_type radio 启用 demand_plus_supply 与切模式行为 |
+| v0.5.7 | §2.11.2 | version_dates 单选联动 + versionDatesExceedsOne 校验 |
+| v0.5.7 | §2.11.3 | 行级底色规范（`row--ds-base` / `row--ttl-gap` / `row--rolling`）+ css 压制 hover |
+| v0.5.7 | §2.11.4 | cell 字体规则（`cell-negative` 红色加粗）+ getCellClass 实现 |
+| v0.5.7 | §4 | 新增 3 条状态文案（切模式 toast + Demand+Supply 多版本提示）|
+| v0.5.7 | §5.6 | 新增 11 个测试用例（含 pivot_type radio / version_dates 单选 / getRowClass / getCellClass / css 渲染）|
+| v0.5.7 | §6 | 删除原 "demand_plus_supply UI 上 disabled" 一项；新增"行级底色不随主题切换"明确说明 |
+| v0.5.7 | §7 | 追加 9 条视觉验证项（含 3 色 hex 与 `cell-negative` rgb + fontWeight）|
 | **v0.5.6** | 头部 / §1.1 / §1.4 / §2.11 / §3 / §4 / §5 / §6 / §7 / §8 | **新增透视查询子模块**：路由 `/pivot-query`；`PivotQuery.vue` + `api/pivot_query.js`；Hub 卡片从 3→4 张；错误码/状态文案/测试计划/不实现组件/验证清单同步更新 |
 | v0.5.6 | §2.11 | 透视查询完整功能点：三组筛选（必填定位 + 业务行级联 + 时间维度）+ 透视表渲染 + 级联提示 + 重置 |
 | v0.5.6 | §5.5 / §5.6 | 新增 API 层 + View 层测试计划（覆盖级联、buildRequest、cellQty、onQuery、onReset、loadWeeks） |
