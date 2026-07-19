@@ -82,13 +82,12 @@ def estimate_size(db: Session, req: PivotQueryRequest) -> int:
 
     # b 子查询字段集合
     if req.pivot_type == "demand_plus_supply":
-        # 配对模式：去掉 data_type
+        # v0.5.7 配对模式去掉 data_type；v0.5.7.4 同步去掉 ttl（TTL 为「总数」语义，不参与分组）
         b_cols = [
             models.DspUploadRow.country,
             models.DspUploadRow.category,
             models.DspUploadRow.config_code,
             models.DspUploadRow.config_name,
-            models.DspUploadRow.ttl,
             models.DspUploadRow.upload_id,
         ]
     else:
@@ -363,6 +362,7 @@ def _query_demand_plus_supply(
     sub_c = _build_c_subquery(req)
 
     # b 子查询：GROUP BY 不含 data_type，让同一业务维度的 Demand / Supply 配对
+    # v0.5.7.4：sub_b GROUP BY 去掉 ttl（TTL 为「总数」语义，不参与分组）；SELECT 用 COALESCE(MAX(ttl), 0) 兜底
     sub_b = (
         select(
             base_rows.c.upload_id.label("upload_id"),
@@ -370,7 +370,7 @@ def _query_demand_plus_supply(
             base_rows.c.category.label("category"),
             base_rows.c.config_code.label("config_code"),
             base_rows.c.config_name.label("config_name"),
-            base_rows.c.ttl.label("ttl"),
+            func.coalesce(func.max(base_rows.c.ttl), 0).label("ttl"),
         )
         .select_from(base_rows)
         .group_by(
@@ -379,7 +379,6 @@ def _query_demand_plus_supply(
             base_rows.c.category,
             base_rows.c.config_code,
             base_rows.c.config_name,
-            base_rows.c.ttl,
         )
         .subquery("b")
     )
@@ -423,7 +422,6 @@ def _query_demand_plus_supply(
             & (sub_d.c.category == sub_b.c.category)
             & (sub_d.c.config_code == sub_b.c.config_code)
             & (sub_d.c.config_name == sub_b.c.config_name)
-            & (sub_d.c.ttl == sub_b.c.ttl)
             & (sub_d.c.row_date == sub_c.c.period_date),
         )
         .order_by(
@@ -446,12 +444,12 @@ def _query_demand_plus_supply(
     grouped: dict[tuple, dict] = {}
     period_columns_set: set[str] = set()
     for row in rows:
+        # v0.5.7.4：group_key 去掉 ttl（TTL 为「总数」语义，不参与分组）
         group_key = (
             row.country,
             row.category,
             row.config_code,
             row.config_name,
-            row.ttl,
             row.version_date,
         )
         period_str = (
@@ -461,8 +459,9 @@ def _query_demand_plus_supply(
         )
         period_columns_set.add(period_str)
         # 初始化嵌套结构：默认两层都存在，便于后期取默认值
+        # v0.5.7.4：ttl 不再在 group_key 中，改为存在 dict 内（COALESCE(MAX(ttl), 0) 的值）
         if group_key not in grouped:
-            grouped[group_key] = {"Demand": {}, "Supply": {}}
+            grouped[group_key] = {"Demand": {}, "Supply": {}, "ttl": int(row.ttl or 0)}
         bucket = grouped[group_key]
         # data_type 可能为 None（d LEFT JOIN 未命中），忽略：等价 quantity=0
         if row.data_type in ("Demand", "Supply"):
@@ -472,7 +471,9 @@ def _query_demand_plus_supply(
     row_groups: list[PivotRow] = []
 
     for group_key in grouped:
-        country, category, config_code, config_name, ttl, version_date = group_key
+        # v0.5.7.4：group_key 去掉 ttl；ttl 从 grouped dict 中读取
+        country, category, config_code, config_name, version_date = group_key
+        ttl = grouped[group_key]["ttl"]
         demand_map = grouped[group_key]["Demand"]
         supply_map = grouped[group_key]["Supply"]
 

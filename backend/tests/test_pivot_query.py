@@ -1251,6 +1251,70 @@ class TestDemandPlusSupply:
         assert result.row_groups[0].data_type == "Demand"
         assert result.row_groups[0].quantities == {"2026-07-06": 100}
 
+    # ---- TC07-7: 不同 ttl 合 1 组（v0.5.7.4） ----
+    def test_demand_plus_supply_merge_diff_ttl(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """v0.5.7.4：同 (country, cat, code, name, version_date) 下 ttl=100 与 ttl=NULL 应合并为 1 组。
+
+        根因：用户 db 中同一业务维度有 ttl=100 的 Demand 行 + ttl=NULL 的 Supply 行；
+        v0.5.7 旧版 group_key 含 ttl 会拆为 2 组 → 8 行（第二组全 0 兜底）；
+        v0.5.7.4 修订后 group_key 去 ttl → 合并为 1 组 → 4 行。
+        """
+        fact_rows = [
+            # ttl=100 Demand
+            {
+                "country": "马来西亚", "category": "交换机整机",
+                "config_code": "X123", "config_name": "8Q-TOR-T4",
+                "data_type": "Demand", "ttl": 100,
+                "ym": "2026-06", "week": "WK26", "date": "2026-06-29",
+                "quantity": 100,
+            },
+            # ttl=NULL Supply（ttl 在 dict 中为 None；make_dsp_upload 按原字段入库）
+            {
+                "country": "马来西亚", "category": "交换机整机",
+                "config_code": "X123", "config_name": "8Q-TOR-T4",
+                "data_type": "Supply", "ttl": None,
+                "ym": "2026-06", "week": "WK26", "date": "2026-06-29",
+                "quantity": 90,
+            },
+        ]
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        make_week_dt(
+            db, "2026-06-29", year_id=2026, month_id=6,
+            week_id=26, is_week_start=True,
+        )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand_plus_supply",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+        )
+        result = pivot_query.query_pivot(db, req)
+        # 合并为 1 组 4 行（不是 8 行）
+        assert result.total_rows == 4
+        assert len(result.row_groups) == 4
+        types = [r.data_type for r in result.row_groups]
+        assert types == ["Demand", "Supply", "TTL_GAP", "Rolling_TTLGAP"]
+        # TTL 展示值：COALESCE(MAX(ttl), 0) = 100（MAX 取最大）
+        demand_row = next(r for r in result.row_groups if r.data_type == "Demand")
+        supply_row = next(r for r in result.row_groups if r.data_type == "Supply")
+        assert demand_row.ttl == 100
+        assert supply_row.ttl == 100
+        # Demand qty=100, Supply qty=90 → TTL_GAP = 90 - 100 = -10
+        ttl_gap = next(r for r in result.row_groups if r.data_type == "TTL_GAP")
+        rolling = next(r for r in result.row_groups if r.data_type == "Rolling_TTLGAP")
+        assert demand_row.quantities == {"2026-06-29": 100}
+        assert supply_row.quantities == {"2026-06-29": 90}
+        assert ttl_gap.quantities == {"2026-06-29": -10}
+        assert rolling.quantities == {"2026-06-29": -10}
+
     @pytest.mark.asyncio
     async def test_demand_plus_supply_api_basic(
         self, client, db, make_dsp_upload, make_week_dt
