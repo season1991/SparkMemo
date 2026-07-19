@@ -187,3 +187,52 @@
 - [x] `requirements.txt` 含 `openpyxl>=3.1`
 - [x] `backend/openapi/dsp_uploads.json` 存在
 - [x] `backend/.todo/dsp_upload.md`（本文件）所有阶段 `[x]`
+
+---
+
+## v0.5.7（实现 demand_plus_supply 模式）
+
+> 适配规格：`backend/spec/weekly_demand.md` §11（Demand+Supply 计算规则）
+> 触发范围：仅 `pivot_query` 子模块；其它子功能不受影响。
+> TDD：本阶段严格执行 README §5.1「先 RED → 后 GREEN」流程——先在 `tests/test_pivot_query.py`
+> 追加 6 条新用例运行确认全红，再进入 Phase 3 实现。修复了 Phase 2 历史 TDD 偏差
+> （见本文件顶部「TDD 偏差说明」）。
+> 完整分析见会话内 plan：Phase RED 6 用例 → Phase GREEN 2 文件 → OpenAPI 1 文件 → 收尾 1 步。
+
+### Phase 0 — 规格定稿
+- [x] `backend/spec/weekly_demand.md` §11 已写入（spec 已于 v0.5.7 定稿）
+
+### Phase 1 — Todo List（本文件）
+- [x] 在本文件追加 v0.5.7 阶段章节
+
+### Phase 2 — 测试驱动（RED）
+> 文件：`backend/tests/test_pivot_query.py` 末尾追加 `TestDemandPlusSupply` 类，共 7 条用例
+> （TC07-1 拆为 API 版本 + Pydantic 版本，因此实测 7 条，比计划多 1 条）。
+
+- [x] **TC07-RED-1** `test_demand_plus_supply_422_multi_versions`（+ `test_demand_plus_supply_multi_versions_pydantic`）pivot_type='demand_plus_supply' + 2 个 version_dates → 422
+- [x] **TC07-RED-2** `test_demand_plus_supply_basic_4_rows` 1 组业务维度 + Demand+Supply 双数据 → row_groups 产出 4 行（Demand / Supply / TTL_GAP / Rolling_TTLGAP）
+- [x] **TC07-RED-3** `test_demand_plus_supply_missing_supply_treated_as_zero` 只有 Demand 无 Supply → Supply 视为 0，TTL_GAP = 0 - Demand
+- [x] **TC07-RED-4** `test_demand_plus_supply_missing_demand_treated_as_zero` 只有 Supply 无 Demand → Demand 视为 0，TTL_GAP = Supply - 0
+- [x] **TC07-RED-5** `test_demand_plus_supply_rolling_ttlgap_cumulative` 多日期 → Rolling_TTLGAP[i] = Rolling_TTLGAP[i-1] + TTL_GAP[i]（首期 = TTL_GAP[0]）
+- [x] **TC07-RED-6** `test_demand_mode_unchanged_by_demand_plus_supply_branch` + `test_demand_plus_supply_api_basic` demand 模式防回归 + demand_plus_supply API 端到端
+
+### Phase 3 — 后端实现（GREEN）
+
+- [x] **3.1** `app/schemas.py` 在 `PivotQueryRequest` 的 `model_validator(mode="after")` 内追加：
+  `pivot_type == 'demand_plus_supply'` 且 `len(version_dates) != 1` → Pydantic 422
+- [x] **3.2** `app/crud/pivot_query.py` `_build_base_rows_filters` 在 `demand_plus_supply` 时把 `data_type == 'Demand'` 改为 `data_type.in_(['Demand', 'Supply'])`
+- [x] **3.3** `app/crud/pivot_query.py` `query_pivot` 拆为两条路径：
+  - `demand`：原实现（b 子查询 GROUP BY 含 data_type），迁出为 `_query_demand`
+  - `demand_plus_supply`：b 子查询 GROUP BY **去掉 data_type**；d 子查询保留 data_type；Python 层按 §11.3 七步产出 4 行/组（迁出为 `_query_demand_plus_supply`）
+- [x] **3.4** `app/api/pivot_query.py` docstring 删除「`pivot_type='demand_plus_supply'` 占位」字样，改为「支持」
+
+### Phase 4 — OpenAPI
+- [x] **4.1** 重新生成 `backend/openapi/pivot_query.json`，删除 v0.5.6 占位描述，补上 v0.5.7 §11 行为说明（52 KB）
+- [x] **4.2** 验证 schema 字段（PivotQueryRequest / PivotRow / PivotQueryResponse）无新增字段（说明派生字段在 Python 层实现）
+
+### Phase 6 — 收尾
+
+- [x] **6.1** todo list（本文件）所有 `[ ]` 改 `[x]`
+- [x] **6.2** 全量 `pytest -q` 254/254 全绿，零回归（其中 pivot_query 40/40：原 33 + 新增 7）
+- [x] **6.3** `grep "占位"` 在 `app/crud/pivot_query.py` / `app/schemas.py` / `app/api/pivot_query.py` 三处全部 0 命中
+- [x] **6.4** 检查 `backend/openapi/pivot_query.json` 内不再含「占位」/「placeholder」字样（0 命中）

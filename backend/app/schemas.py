@@ -445,7 +445,7 @@ class DspUploadRowListResponse(BaseModel):
 # ========== 透视查询（v0.5.6）模式 ==========
 
 
-# 透视类型：当前版本固定支持 'demand'（v0.5.6 需求）；'demand_plus_supply' 占位待后续实现
+# 透视类型：'demand' 固定 Demand 数据；'demand_plus_supply' 同时取 Demand + Supply 并派生 TTL_GAP / Rolling_TTLGAP
 PivotType = Literal["demand", "demand_plus_supply"]
 
 
@@ -453,7 +453,9 @@ class PivotQueryRequest(BaseModel):
     """透视查询请求体。
 
     入参分四组：
-    1. 必填定位：`pivot_type` / `vendor` / `item` / `sub_item` / `version_dates`（≥1）
+    1. 必填定位：`pivot_type` / `vendor` / `item` / `sub_item` / `version_dates`
+       - `pivot_type='demand'`：1-20 个 version_dates（多选）
+       - `pivot_type='demand_plus_supply'`：仅 1 个 version_date（单选，超限 → 422）
     2. 横向业务行筛选（可选）：`countries` / `categories` / `config_codes` / `config_names`
        - **严格级联**：`config_names` 提供 → 必须提供 `categories` → 必须提供 `countries`
     3. 纵向日期筛选（可选）：`years` / `months` / `weeks`
@@ -462,8 +464,9 @@ class PivotQueryRequest(BaseModel):
        - **至少一个**：必须提供 `years` / `months` / `weeks` 其一
     4. 展示控制：`expand_to_daily`（默认 False = 按周；True = 按日）
 
-    `pivot_type='demand'` 时固定注入 `data_type='Demand'` 过滤（v0.5.6 简化）；
-    `pivot_type='demand_plus_supply'` 暂不实现具体行为（占位）。
+    `pivot_type='demand'` 时固定注入 `data_type='Demand'` 过滤；
+    `pivot_type='demand_plus_supply'` 时改为 `data_type IN ('Demand', 'Supply')`，并在响应中
+    Python 层派生 `TTL_GAP` / `Rolling_TTLGAP` 两行（详见 spec §11）。
     """
 
     pivot_type: PivotType = "demand"
@@ -535,6 +538,16 @@ class PivotQueryRequest(BaseModel):
         if not (self.years or self.months or self.weeks):
             raise ValueError(
                 "at least one of years / months / weeks must be provided"
+            )
+
+        # v0.5.7：demand_plus_supply 模式仅支持单个 version_date（单选）。
+        # 因 TTL_GAP / Rolling_TTLGAP 按 version_date 单独成行，
+        # 多版本会让行数膨胀到不可控；故在模型层阻断。
+        if self.pivot_type == "demand_plus_supply" and len(self.version_dates) != 1:
+            raise ValueError(
+                "pivot_type='demand_plus_supply' only supports a single "
+                "version_date; please provide exactly 1 element in "
+                "version_dates (got %d)" % len(self.version_dates)
             )
 
         return self

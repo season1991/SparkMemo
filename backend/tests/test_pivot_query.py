@@ -946,9 +946,352 @@ class TestLookupApi:
     async def test_get_weeks_of_month_missing_param(
         self, client, db
     ):
-        # 缺 month → FastAPI 必填校验失败 → 422
+        # ȱ month  FastAPI Уʧ  422
         resp = await client.get(
             "/api/pivot-query/lookups/weeks-of-month",
             params={"year": 2025},
         )
         assert resp.status_code == 422
+
+
+# ---------- TC07 (v0.5.7): demand_plus_supply 模式 ----------
+
+
+class TestDemandPlusSupply:
+    """v0.5.7 新增：pivot_type='demand_plus_supply' 模式。
+
+    业务规则（详见 spec §11）：
+    1. `version_dates` 仅允许 1 个（单选），违反 → Pydantic 422
+    2. SQL `base_rows` CTE 改为 `data_type IN ('Demand', 'Supply')`
+    3. `b` 子查询 GROUP BY 去掉 `data_type`，让 Demand/Supply 配对到同一业务组
+    4. Python 层后处理产出 4 行/组：Demand / Supply / TTL_GAP / Rolling_TTLGAP
+    5. TTL_GAP[period_date] = Supply.quantity - Demand.quantity（缺失视为 0）
+    6. Rolling_TTLGAP 累计：首期 = TTL_GAP[0]，后续 = 上期 + TTL_GAP[i]
+    """
+
+    # ---- TC07-1: multi version_dates 422 ----
+    @pytest.mark.asyncio
+    async def test_demand_plus_supply_422_multi_versions(self, client):
+        """pivot_type='demand_plus_supply' 不允许多 version_dates。"""
+        payload = {
+            "pivot_type": "demand_plus_supply",
+            "vendor": "Arista",
+            "item": "X",
+            "sub_item": "Y",
+            "version_dates": ["2026-06-29", "2026-07-15"],
+            "years": [2026],
+        }
+        resp = await client.post("/api/pivot-query", json=payload)
+        assert resp.status_code == 422
+
+    def test_demand_plus_supply_multi_versions_pydantic(self):
+        """同上的 Pydantic 模型层校验（不依赖 API）。"""
+        from pydantic import ValidationError
+
+        from app.schemas import PivotQueryRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            PivotQueryRequest(
+                pivot_type="demand_plus_supply",
+                vendor="Arista",
+                item="X",
+                sub_item="Y",
+                version_dates=["2026-06-29", "2026-07-15"],
+                years=[2026],
+            )
+        assert (
+            "demand_plus_supply" in str(exc_info.value).lower()
+            or "single" in str(exc_info.value).lower()
+            or "1" in str(exc_info.value)
+        )
+
+    # ---- TC07-2: 基本 4 行产出 ----
+    def test_demand_plus_supply_basic_4_rows(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """1 组业务维度 + Demand/Supply 双数据 → row_groups 恰好 4 行。"""
+        fact_rows = [
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Demand", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 100,
+            },
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Supply", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 120,
+            },
+        ]
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        make_week_dt(
+            db, "2026-07-06", year_id=2026, month_id=7,
+            week_id=27, is_week_start=True,
+        )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand_plus_supply",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+        )
+        result = pivot_query.query_pivot(db, req)
+        assert result.total_rows == 4
+        assert len(result.row_groups) == 4
+        types = [r.data_type for r in result.row_groups]
+        assert types == ["Demand", "Supply", "TTL_GAP", "Rolling_TTLGAP"]
+        # TTL_GAP = Supply - Demand = 120 - 100 = 20
+        ttl_gap = next(r for r in result.row_groups if r.data_type == "TTL_GAP")
+        assert ttl_gap.quantities == {"2026-07-06": 20}
+        # Rolling_TTLGAP 首期 = TTL_GAP[0] = 20
+        rolling = next(
+            r for r in result.row_groups if r.data_type == "Rolling_TTLGAP"
+        )
+        assert rolling.quantities == {"2026-07-06": 20}
+
+    # ---- TC07-3: 缺 Supply → TTL_GAP = 0 - Demand ----
+    def test_demand_plus_supply_missing_supply_treated_as_zero(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """只有 Demand 没有 Supply → Supply 量按 0，TTL_GAP = -Demand。"""
+        fact_rows = [
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Demand", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 100,
+            },
+        ]
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        make_week_dt(
+            db, "2026-07-06", year_id=2026, month_id=7,
+            week_id=27, is_week_start=True,
+        )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand_plus_supply",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+        )
+        result = pivot_query.query_pivot(db, req)
+        assert result.total_rows == 4
+        demand_row = next(r for r in result.row_groups if r.data_type == "Demand")
+        supply_row = next(r for r in result.row_groups if r.data_type == "Supply")
+        ttl_gap = next(r for r in result.row_groups if r.data_type == "TTL_GAP")
+        assert demand_row.quantities == {"2026-07-06": 100}
+        assert supply_row.quantities == {"2026-07-06": 0}
+        # TTL_GAP = Supply - Demand = 0 - 100 = -100
+        assert ttl_gap.quantities == {"2026-07-06": -100}
+
+    # ---- TC07-4: 缺 Demand → TTL_GAP = Supply ----
+    def test_demand_plus_supply_missing_demand_treated_as_zero(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """只有 Supply 没有 Demand → Demand 量按 0，TTL_GAP = Supply。"""
+        fact_rows = [
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Supply", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 80,
+            },
+        ]
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        make_week_dt(
+            db, "2026-07-06", year_id=2026, month_id=7,
+            week_id=27, is_week_start=True,
+        )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand_plus_supply",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+        )
+        result = pivot_query.query_pivot(db, req)
+        demand_row = next(r for r in result.row_groups if r.data_type == "Demand")
+        ttl_gap = next(r for r in result.row_groups if r.data_type == "TTL_GAP")
+        rolling = next(
+            r for r in result.row_groups if r.data_type == "Rolling_TTLGAP"
+        )
+        assert demand_row.quantities == {"2026-07-06": 0}
+        assert ttl_gap.quantities == {"2026-07-06": 80}
+        assert rolling.quantities == {"2026-07-06": 80}
+
+    # ---- TC07-5: 多日期 Rolling_TTLGAP 累计 ----
+    def test_demand_plus_supply_rolling_ttlgap_cumulative(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """3 个周起始日的 Rolling_TTLGAP 累计：首期 = TTL_GAP[0]，后续累计。"""
+        # D: 100 / 80 / 50，S: 120 / 90 / 60 → TTL_GAP: 20 / 10 / 10 → Rolling: 20 / 30 / 40
+        fact_rows = []
+        demand_seq = [("2026-07-06", 100), ("2026-07-13", 80), ("2026-07-20", 50)]
+        supply_seq = [("2026-07-06", 120), ("2026-07-13", 90), ("2026-07-20", 60)]
+        for dt, q in demand_seq:
+            fact_rows.append({
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Demand", "ttl": 4,
+                "ym": dt[:7], "week": "WK", "date": dt, "quantity": q,
+            })
+        for dt, q in supply_seq:
+            fact_rows.append({
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Supply", "ttl": 4,
+                "ym": dt[:7], "week": "WK", "date": dt, "quantity": q,
+            })
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        for dt, week_id in [
+            ("2026-07-06", 27), ("2026-07-13", 28), ("2026-07-20", 29),
+        ]:
+            make_week_dt(
+                db, dt, year_id=2026, month_id=7,
+                week_id=week_id, is_week_start=True,
+            )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand_plus_supply",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+        )
+        result = pivot_query.query_pivot(db, req)
+        # period_columns 按日期升序
+        assert result.period_columns == ["2026-07-06", "2026-07-13", "2026-07-20"]
+        # 业务维度按 (country, category, code, name, ttl, version_date) 分组，
+        # 且 1 组仅 1 个 version_date，所以 4 行
+        assert result.total_rows == 4
+        ttl_gap = next(r for r in result.row_groups if r.data_type == "TTL_GAP")
+        rolling = next(
+            r for r in result.row_groups if r.data_type == "Rolling_TTLGAP"
+        )
+        assert ttl_gap.quantities == {
+            "2026-07-06": 20, "2026-07-13": 10, "2026-07-20": 10,
+        }
+        assert rolling.quantities == {
+            "2026-07-06": 20, "2026-07-13": 30, "2026-07-20": 40,
+        }
+        # period_columns 必须在每个 row 都覆盖到
+        demand_row = next(r for r in result.row_groups if r.data_type == "Demand")
+        supply_row = next(r for r in result.row_groups if r.data_type == "Supply")
+        assert demand_row.quantities == {
+            "2026-07-06": 100, "2026-07-13": 80, "2026-07-20": 50,
+        }
+        assert supply_row.quantities == {
+            "2026-07-06": 120, "2026-07-13": 90, "2026-07-20": 60,
+        }
+
+    # ---- TC07-6: demand 模式回归（防回归） ----
+    def test_demand_mode_unchanged_by_demand_plus_supply_branch(
+        self, db, make_dsp_upload, make_week_dt
+    ):
+        """需求回归：demand 模式仍只输出 1 行 Demand；不出现 Supply / TTL_GAP。"""
+        fact_rows = [
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Demand", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 100,
+            },
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Supply", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 999,  # 混入 Supply，demand 模式应忽略
+            },
+        ]
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        make_week_dt(
+            db, "2026-07-06", year_id=2026, month_id=7,
+            week_id=27, is_week_start=True,
+        )
+
+        from app.schemas import PivotQueryRequest
+
+        req = PivotQueryRequest(
+            pivot_type="demand",
+            vendor="Arista", item="X", sub_item="Y",
+            version_dates=["2026-06-29"],
+            years=[2026],
+        )
+        result = pivot_query.query_pivot(db, req)
+        assert result.total_rows == 1
+        assert result.row_groups[0].data_type == "Demand"
+        assert result.row_groups[0].quantities == {"2026-07-06": 100}
+
+    @pytest.mark.asyncio
+    async def test_demand_plus_supply_api_basic(
+        self, client, db, make_dsp_upload, make_week_dt
+    ):
+        """API 端到端：demand_plus_supply 模式返回 4 行 / TTL_GAP 字段为 Supply-Demand。"""
+        fact_rows = [
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Demand", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 100,
+            },
+            {
+                "country": "爱尔兰", "category": "交换机整机",
+                "config_code": "X123", "config_name": "32Q-TOR-T3",
+                "data_type": "Supply", "ttl": 4,
+                "ym": "2026-07", "week": "WK27", "date": "2026-07-06",
+                "quantity": 130,
+            },
+        ]
+        make_dsp_upload(
+            db, vendor="Arista", item="X", sub_item="Y",
+            version_date="2026-06-29", fact_rows=fact_rows,
+        )
+        make_week_dt(
+            db, "2026-07-06", year_id=2026, month_id=7,
+            week_id=27, is_week_start=True,
+        )
+
+        payload = {
+            "pivot_type": "demand_plus_supply",
+            "vendor": "Arista", "item": "X", "sub_item": "Y",
+            "version_dates": ["2026-06-29"],
+            "years": [2026],
+        }
+        resp = await client.post("/api/pivot-query", json=payload)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_rows"] == 4
+        types = [rg["data_type"] for rg in body["row_groups"]]
+        assert types == ["Demand", "Supply", "TTL_GAP", "Rolling_TTLGAP"]
+        ttl_gap = next(rg for rg in body["row_groups"] if rg["data_type"] == "TTL_GAP")
+        assert ttl_gap["quantities"] == {"2026-07-06": 30}

@@ -1,13 +1,16 @@
-"""/api/pivot-query 路由（v0.5.6 — 透视查询）。
+"""/api/pivot-query 路由（v0.5.7 — 透视查询）。
+
+v0.5.7 业务范围：
+- 支持 `pivot_type='demand'`：固定注入 `data_type='Demand'`
+- 支持 `pivot_type='demand_plus_supply'`：SQL `base_rows` CTE 改为 `IN ('Demand', 'Supply')`，
+  b 子查询 GROUP BY 去掉 `data_type`，Python 层派生 `TTL_GAP` / `Rolling_TTLGAP` 两行
+  （详见 spec §11 / crud/pivot_query.py）
+- 不涉及 dsp_uploads 的上传/查询/删除子功能；纯只读
 
 错误约定：
-- 422：Pydantic 级联校验失败（业务行/时间维度）/ 笛卡尔积预检超出 MAX_CARTESIAN
+- 422：Pydantic 级联校验失败（业务行 / 时间维度 / `demand_plus_supply` 时 version_dates ≠ 1）
+  / 笛卡尔积预检超出 MAX_CARTESIAN
 - 500：SQLAlchemy 异常（如 week_dt 表不存在）
-
-业务范围（v0.5.6）：
-- 仅支持 `pivot_type='demand'`（固定注入 `data_type='Demand'`）
-- `pivot_type='demand_plus_supply'` 占位（Schema 接受但行为等同 'demand'，留给后续实现）
-- 不涉及 dsp_uploads 的上传/查询/删除子功能；纯只读
 """
 from __future__ import annotations
 
