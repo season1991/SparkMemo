@@ -65,8 +65,10 @@ const form = reactive({
   vendor: '',
   item: '',
   sub_item: '',
-  version_dates: [],
-  // pivot 类型（v0.5.6 固定 demand）
+  // v0.5.7 拆分：demand 模式用数组，demand_plus_supply 模式用单值
+  version_dates: [],            // demand 模式专用（数组，多选）
+  version_date_single: '',      // demand_plus_supply 模式专用（单值）
+  // pivot 类型
   pivot_type: 'demand',
   // 日期粒度
   date_granularity: 'week',  // 'week' | 'day'
@@ -86,13 +88,33 @@ const result = ref(null)  // PivotQueryResponse
 // ==================== 计算属性 ====================
 
 const canQuery = computed(() => {
+  // v0.5.7 修订：version_dates / version_date_single 按 pivot_type 互斥生效
+  const hasVersion =
+    form.pivot_type === 'demand'
+      ? form.version_dates.length >= 1
+      : form.version_date_single !== ''
   return (
     form.vendor !== '' &&
     form.item !== '' &&
     form.sub_item !== '' &&
-    form.version_dates.length >= 1 &&
+    hasVersion &&
     (form.years !== '' || form.months.length >= 1 || form.weeks.length >= 1)
   )
+})
+
+// v0.5.7 受控 v-model：el-select v-model 与 :multiple 类型严格匹配
+// demand → 数组（多选）；demand_plus_supply → string（单选）；两者通过 setter 写到不同字段
+const versionDateVModel = computed({
+  get() {
+    return form.pivot_type === 'demand' ? form.version_dates : form.version_date_single
+  },
+  set(v) {
+    if (form.pivot_type === 'demand') {
+      form.version_dates = Array.isArray(v) ? v : []
+    } else {
+      form.version_date_single = typeof v === 'string' ? v : ''
+    }
+  }
 })
 
 const cascadeHint = computed(() => {
@@ -120,7 +142,7 @@ const fixedColumns = [
   { prop: 'category', label: 'Category', width: 110 },
   { prop: 'config_code', label: 'Config Code', width: 140 },
   { prop: 'config_name', label: 'Config Name', width: 160 },
-  { prop: 'data_type', label: 'Data Type', width: 90 },
+  { prop: 'data_type', label: 'Data Type', width: 140 },
   { prop: 'ttl', label: 'TTL', width: 60 },
 ]
 
@@ -197,6 +219,16 @@ async function loadVersionDates() {
   }
 }
 
+// v0.5.7 helper：拼装当前 pivot_type 应当使用的 version_dates 数组
+// demand → form.version_dates 数组副本；
+// demand_plus_supply → 把单值包成单元素数组
+function versionDatesForLookup() {
+  if (form.pivot_type === 'demand_plus_supply' && form.version_date_single) {
+    return [form.version_date_single]
+  }
+  return form.version_dates.slice()
+}
+
 // ==================== 业务行筛选 lookup ====================
 
 async function loadCountries() {
@@ -210,7 +242,7 @@ async function loadCountries() {
       vendor: form.vendor,
       item: form.item,
       sub_item: form.sub_item,
-      version_dates: form.version_dates,
+      version_dates: versionDatesForLookup(),
     })
   } catch (err) {
     showApiError(err)
@@ -230,7 +262,7 @@ async function loadCategories() {
       vendor: form.vendor,
       item: form.item,
       sub_item: form.sub_item,
-      version_dates: form.version_dates,
+      version_dates: versionDatesForLookup(),
       countries: form.countries,
     })
   } catch (err) {
@@ -251,7 +283,7 @@ async function loadConfigNames() {
       vendor: form.vendor,
       item: form.item,
       sub_item: form.sub_item,
-      version_dates: form.version_dates,
+      version_dates: versionDatesForLookup(),
       countries: form.countries,
       categories: form.categories,
     })
@@ -420,12 +452,17 @@ function onDateGranularityChange() {
 // ==================== 查询 ====================
 
 function buildRequest() {
+  // v0.5.7：version_dates 按 pivot_type 从不同字段构造
+  const versionDates =
+    form.pivot_type === 'demand_plus_supply'
+      ? (form.version_date_single ? [form.version_date_single] : [])
+      : form.version_dates.slice()
   const req = {
     pivot_type: form.pivot_type,
     vendor: form.vendor,
     item: form.item,
     sub_item: form.sub_item,
-    version_dates: form.version_dates.slice(),
+    version_dates: versionDates,
     expand_to_daily: form.date_granularity === 'day'
   }
   if (form.countries.length > 0) req.countries = form.countries.slice()
@@ -463,6 +500,7 @@ function onReset() {
   form.item = ''
   form.sub_item = ''
   form.version_dates = []
+  form.version_date_single = ''
   form.pivot_type = 'demand'
   form.date_granularity = 'week'
   form.countries = []
@@ -488,6 +526,54 @@ function cellQty(row, periodDate) {
   const v = row.quantities ? row.quantities[periodDate] : undefined
   return typeof v === 'number' ? v : 0
 }
+
+// v0.5.7 新增：行级 class — 让用户一眼识别 4 行/组（Demand/Supply / TTL_GAP / Rolling_TTLGAP）
+// Demand 与 Supply 共用一类（原始数据组，强调"配对"语义）
+function getRowClass({ row }) {
+  if (!row || !row.data_type) return ''
+  if (row.data_type === 'TTL_GAP') return 'row--ttl-gap'
+  if (row.data_type === 'Rolling_TTLGAP') return 'row--rolling'
+  return 'row--ds-base'  // 'Demand' / 'Supply'
+}
+
+// v0.5.7 新增：cell class — 仅 TTL_GAP / Rolling_TTLGAP 行的负数量触发红色加粗
+function getCellClass(row, periodDate) {
+  const v = cellQty(row, periodDate)
+  if (
+    v < 0 &&
+    (row.data_type === 'TTL_GAP' || row.data_type === 'Rolling_TTLGAP')
+  ) {
+    return 'cell-negative'
+  }
+  return v === 0 ? 'zero-cell' : 'nonzero-cell'
+}
+
+// ==================== pivot_type 切换（v0.5.7 新增） ====================
+
+// 当 pivot_type 切换时清理状态；切到 demand_plus_supply 时若已选 ≥ 2 个版本日期，toast 提示
+// v0.5.7 pivot_type 切换：互斥同步 version_dates / version_date_single 两个字段
+// 同步后 ElMessage 提示；不再使用 versionDatesExceedsOne（v-model 与 :multiple 类型严格匹配，UI 无法选 2 个）
+function onPivotTypeChange(newType, oldType) {
+  // 任何 pivot_type 切换都清空结果（避免展示过期透视表）
+  result.value = null
+  if (newType === 'demand_plus_supply' && oldType === 'demand') {
+    // demand → dps：取数组的第一个作为单值；多余项丢弃（保留至多 1 个）
+    form.version_date_single = form.version_dates[0] || ''
+    form.version_dates = []
+  } else if (newType === 'demand' && oldType === 'demand_plus_supply') {
+    // dps → demand：单值塞进数组；保证多选模式至少 1 个
+    form.version_dates = form.version_date_single ? [form.version_date_single] : []
+    form.version_date_single = ''
+  }
+  // 已查询过 result 后切换，给出切换提示
+  if (oldType) {
+    ElMessage.success(
+      newType === 'demand_plus_supply' ? '已切换到 Demand+Supply 模式' : '已切换到 Demand 模式'
+    )
+  }
+}
+
+watch(() => form.pivot_type, onPivotTypeChange)
 
 // ==================== 初始化 ====================
 
@@ -550,14 +636,19 @@ onMounted(() => {
           </el-form-item>
         </div>
 
-        <!-- 第 2 行：版本日期（多选）+ pivot_type + 日期粒度 -->
+        <!-- 第 2 行：版本日期 + pivot_type + 日期粒度 -->
         <div class="form-row">
-          <el-form-item label="版本日期（version_date，可多选）" class="form-cell-wide">
+          <el-form-item
+            :label="form.pivot_type === 'demand'
+              ? '版本日期（version_date，可多选）'
+              : '版本日期（version_date，单选）'"
+            class="form-cell-wide"
+          >
             <el-select
-              v-model="form.version_dates"
-              multiple
-              collapse-tags
-              collapse-tags-tooltip
+              v-model="versionDateVModel"
+              :multiple="form.pivot_type === 'demand'"
+              :collapse-tags="form.pivot_type === 'demand'"
+              :collapse-tags-tooltip="form.pivot_type === 'demand'"
               placeholder="请先选择子业务项"
               :loading="loadingVersionDates"
               :disabled="!form.sub_item"
@@ -576,7 +667,8 @@ onMounted(() => {
           <el-form-item label="透视类型" class="form-cell-narrow">
             <el-radio-group v-model="form.pivot_type">
               <el-radio-button value="demand">Demand</el-radio-button>
-              <el-radio-button value="demand_plus_supply" :disabled="true">
+              <!-- v0.5.7 起启用 demand_plus_supply（去掉 :disabled）-->
+              <el-radio-button value="demand_plus_supply">
                 Demand+Supply
               </el-radio-button>
             </el-radio-group>
@@ -746,6 +838,7 @@ onMounted(() => {
       <div v-else class="pivot-table-wrapper">
         <el-table
           :data="result.row_groups"
+          :row-class-name="getRowClass"
           stripe
           size="small"
           border
@@ -771,10 +864,7 @@ onMounted(() => {
             align="right"
           >
             <template #default="slotProps">
-              <span :class="{
-                'zero-cell': slotProps && cellQty(slotProps.row, pd) === 0,
-                'nonzero-cell': slotProps && cellQty(slotProps.row, pd) !== 0
-              }">
+              <span :class="slotProps ? getCellClass(slotProps.row, pd) : 'zero-cell'">
                 {{ slotProps ? cellQty(slotProps.row, pd) : 0 }}
               </span>
             </template>
@@ -868,5 +958,35 @@ onMounted(() => {
 .nonzero-cell {
   font-weight: 600;
   color: #303133;
+}
+
+/* v0.5.7.2 修订：行级底色分组（Demand+Supply / TTL_GAP / Rolling_TTLGAP）*/
+/* 【v0.5.7.2 关键约束】
+ * Vue <style scoped> 会给每个选择器末尾追加 [data-v-XXX] 属性。
+ * el-table / tr / td 都是 Element Plus 子组件渲染出来的 DOM，不带本组件的 data-v-XXX，
+ * 若不写 :deep()，编译后整条规则被 el-table 子组件 DOM 过滤掉，三色底色全部失效。
+ * 对照 Dashboard.vue:319（同项目同类用法）。
+ */
+/* 用 > td !important 压制 Element Plus 默认行 hover 高亮 */
+.pivot-view :deep(.el-table__body tr.row--ds-base > td) {
+  background-color: #ecf5ff !important;
+}
+.pivot-view :deep(.el-table__body tr.row--ttl-gap > td) {
+  background-color: #fdf6ec !important;
+}
+.pivot-view :deep(.el-table__body tr.row--rolling > td) {
+  background-color: #fef0f0 !important;
+}
+/* 行底色不覆盖 cell 文本颜色（cell 文本仍按 zero-cell / nonzero-cell / cell-negative 决定）*/
+.pivot-view :deep(.el-table__body tr.row--ttl-gap > td.zero-cell),
+.pivot-view :deep(.el-table__body tr.row--rolling > td.zero-cell),
+.pivot-view :deep(.el-table__body tr.row--ttl-gap > td.cell-negative),
+.pivot-view :deep(.el-table__body tr.row--rolling > td.cell-negative) {
+  color: inherit;
+}
+/* v0.5.7：负数强烈突出，仅 TTL_GAP / Rolling 命中 */
+.cell-negative {
+  font-weight: 700;
+  color: #f56c6c;
 }
 </style>

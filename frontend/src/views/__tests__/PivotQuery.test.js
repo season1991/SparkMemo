@@ -347,3 +347,355 @@ describe('PivotQuery lookup 调用入参', () => {
     expect(vm.form.weeks).toEqual([])
   })
 })
+
+// ==================== v0.5.7 新增 ====================
+
+describe('v0.5.7 PivotQuery getRowClass 行级底色', () => {
+  it('Demand 行 → row--ds-base', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const cls = wrapper.vm.getRowClass({ row: { data_type: 'Demand' } })
+    expect(cls).toBe('row--ds-base')
+  })
+
+  it('Supply 行 → row--ds-base（与 Demand 同色，强调"配对"语义）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const cls = wrapper.vm.getRowClass({ row: { data_type: 'Supply' } })
+    expect(cls).toBe('row--ds-base')
+  })
+
+  it('TTL_GAP 行 → row--ttl-gap（单期派生）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const cls = wrapper.vm.getRowClass({ row: { data_type: 'TTL_GAP' } })
+    expect(cls).toBe('row--ttl-gap')
+  })
+
+  it('Rolling_TTLGAP 行 → row--rolling（累计派生）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const cls = wrapper.vm.getRowClass({ row: { data_type: 'Rolling_TTLGAP' } })
+    expect(cls).toBe('row--rolling')
+  })
+
+  it('data_type 缺失 → 空字符串', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    expect(wrapper.vm.getRowClass({ row: {} })).toBe('')
+    expect(wrapper.vm.getRowClass({ row: null })).toBe('')
+  })
+})
+
+// v0.5.7.2 新增：静态源文件检查 — 防止 v0.5.7 的「scoped + 子组件缺 :deep()」回归
+// jsdom 不能验证 <style scoped> 编译后选择器是否真实命中 Element Plus 子组件 DOM，
+// 但能扫描源码确保每条 background-color 规则都在 :deep() 块内，从而保证编译产物可匹配
+const fs = require('node:fs')
+const path = require('node:path')
+const sourcePath = path.resolve(__dirname, '..', 'PivotQuery.vue')
+const sourceCode = fs.readFileSync(sourcePath, 'utf-8')
+
+describe('v0.5.7.2 PivotQuery 行级底色 :deep() 源文件检查', () => {
+  it('源码包含 #fdf6ec 颜色值（TTL_GAP 行底色）', () => {
+    expect(sourceCode).toContain('#fdf6ec')
+  })
+
+  it('源码包含 #fef0f0 颜色值（Rolling_TTLGAP 行底色）', () => {
+    expect(sourceCode).toContain('#fef0f0')
+  })
+
+  it('源码包含 #ecf5ff 颜色值（Demand+Supply 行底色）', () => {
+    expect(sourceCode).toContain('#ecf5ff')
+  })
+
+  it('3 条 background-color !important 规则都在 :deep() 选择器内', () => {
+    // 实现思路：从 `background-color: <color> !important` 反向找到本规则所在选择器区段
+    // （前一个 `}` 到规则内容），该区段必须含 `:deep(`。
+    const colors = ['#fdf6ec', '#fef0f0', '#ecf5ff']
+    for (const color of colors) {
+      const idx = sourceCode.indexOf(`background-color: ${color} !important`)
+      expect(idx, `${color} 规则须存在`).toBeGreaterThan(-1)
+      // 向前找最近的 `}` 或文件头；从那里开始到 idx 是选择器区段（含 `:deep(...)`）
+      const prevBrace = sourceCode.lastIndexOf('}', idx)
+      const searchStart = prevBrace === -1 ? 0 : prevBrace + 1
+      const selectorRegion = sourceCode.slice(searchStart, idx)
+      expect(
+        selectorRegion.includes(':deep('),
+        `${color} 规则前的选择器区段必须包含 :deep()（v0.5.7.2 修复）`
+      ).toBe(true)
+    }
+  })
+})
+
+// v0.5.7.3 新增：data_type 列宽 90 → 140，防止回到旧值导致 Rolling_TTLGAP 被截断
+// jsdom 同样不能验证实际 UI 列宽渲染（同 v0.5.7.2 视觉分组同源问题）
+describe('v0.5.7.3 PivotQuery data_type 列宽 90 → 140 源文件检查', () => {
+  const dataTypeLine = sourceCode
+    .split('\n')
+    .find((l) => l.includes("prop: 'data_type'"))
+
+  it('fixedColumns 中包含 prop: \'data_type\' 行', () => {
+    expect(dataTypeLine, "data_type 行须存在").toBeDefined()
+  })
+
+  it("data_type 行 width = 140（防止回到旧值 90）", () => {
+    expect(dataTypeLine).toBeDefined()
+    // 同行 80 字符内必须出现 width: 140
+    expect(dataTypeLine).toMatch(/width:\s*140/)
+  })
+
+  it("data_type 行 width 不再为 90", () => {
+    expect(dataTypeLine).toBeDefined()
+    expect(dataTypeLine).not.toMatch(/width:\s*90\b/)
+  })
+})
+
+describe('v0.5.7 PivotQuery getCellClass cell 字体规则', () => {
+  it('TTL_GAP 行的负数量 → cell-negative', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const row = { data_type: 'TTL_GAP', quantities: { '2026-07-06': -10 } }
+    expect(wrapper.vm.getCellClass(row, '2026-07-06')).toBe('cell-negative')
+  })
+
+  it('Rolling_TTLGAP 行的负数量 → cell-negative', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const row = { data_type: 'Rolling_TTLGAP', quantities: { '2026-07-06': -25 } }
+    expect(wrapper.vm.getCellClass(row, '2026-07-06')).toBe('cell-negative')
+  })
+
+  it('TTL_GAP 行的零数量 → zero-cell（不加红）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const row = { data_type: 'TTL_GAP', quantities: { '2026-07-06': 0 } }
+    expect(wrapper.vm.getCellClass(row, '2026-07-06')).toBe('zero-cell')
+  })
+
+  it('TTL_GAP 行的正数量 → nonzero-cell（不加红）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const row = { data_type: 'TTL_GAP', quantities: { '2026-07-06': 20 } }
+    expect(wrapper.vm.getCellClass(row, '2026-07-06')).toBe('nonzero-cell')
+  })
+
+  it('Demand / Supply 行的任意数量（即使是负）→ 不返回 cell-negative', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    // 业务上 Demand / Supply 不会出现负数；负数时也按 zero/nonzero 处理（不触发红）
+    const demandNeg = { data_type: 'Demand', quantities: { '2026-07-06': -5 } }
+    const supplyPos = { data_type: 'Supply', quantities: { '2026-07-06': 100 } }
+    expect(wrapper.vm.getCellClass(demandNeg, '2026-07-06')).toBe('nonzero-cell')
+    expect(wrapper.vm.getCellClass(supplyPos, '2026-07-06')).toBe('nonzero-cell')
+  })
+})
+
+describe('v0.5.7 PivotQuery version_dates / version_date_single 字段拆分', () => {
+  it('初始 form 包含两个版本日期字段：version_dates（数组）+ version_date_single（空字符串）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    expect(vm.form.version_dates).toEqual([])
+    expect(vm.form.version_date_single).toBe('')
+  })
+})
+
+describe('v0.5.7 PivotQuery versionDateVModel 受控 v-model', () => {
+  it('demand 模式 getter 返回数组', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand'
+    vm.form.version_dates = ['v1', 'v2']
+    expect(vm.versionDateVModel).toEqual(['v1', 'v2'])
+  })
+
+  it('dps 模式 getter 返回字符串', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.version_date_single = 'v1'
+    expect(vm.versionDateVModel).toBe('v1')
+  })
+
+  it('demand 模式 setter 写入数组', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand'
+    vm.versionDateVModel = ['v1', 'v2']
+    expect(vm.form.version_dates).toEqual(['v1', 'v2'])
+  })
+
+  it('dps 模式 setter 写入字符串', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.versionDateVModel = 'v1'
+    expect(vm.form.version_date_single).toBe('v1')
+  })
+
+  it('demand 模式 setter 非数组 → 写为空数组（防御）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand'
+    vm.versionDateVModel = 'v1'
+    expect(vm.form.version_dates).toEqual([])
+  })
+
+  it('dps 模式 setter 非字符串 → 写为空字符串（防御）', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.versionDateVModel = ['v1', 'v2']
+    expect(vm.form.version_date_single).toBe('')
+  })
+})
+
+describe('v0.5.7 PivotQuery canQuery 按模式判定版本日期', () => {
+  it('demand 模式 + version_dates 1 个 → canQuery true', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_dates = ['2026-06-29']
+    vm.form.years = '2026'
+    expect(vm.canQuery).toBe(true)
+  })
+
+  it('dps 模式 + version_date_single 设置 → canQuery true', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_date_single = '2026-06-29'
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.years = '2026'
+    expect(vm.canQuery).toBe(true)
+  })
+
+  it('dps 模式 + version_date_single 为空 → canQuery false', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_date_single = ''
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.years = '2026'
+    expect(vm.canQuery).toBe(false)
+  })
+})
+
+describe('v0.5.7 PivotQuery onPivotTypeChange 同步两个字段', () => {
+  it('demand → dps：取 version_dates[0] 到 version_date_single；array 清空', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.version_dates = ['2026-06-29', '2026-07-15']
+    vm.onPivotTypeChange('demand_plus_supply', 'demand')
+    expect(vm.form.version_date_single).toBe('2026-06-29')
+    expect(vm.form.version_dates).toEqual([])
+  })
+
+  it('demand → dps：version_dates 为空时 version_date_single = ""', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.version_dates = []
+    vm.onPivotTypeChange('demand_plus_supply', 'demand')
+    expect(vm.form.version_date_single).toBe('')
+  })
+
+  it('dps → demand：单值塞入数组；version_date_single 清空', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.version_date_single = '2026-06-29'
+    vm.onPivotTypeChange('demand', 'demand_plus_supply')
+    expect(vm.form.version_dates).toEqual(['2026-06-29'])
+    expect(vm.form.version_date_single).toBe('')
+  })
+
+  it('dps → demand：单值为空时数组也为空', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.version_date_single = ''
+    vm.onPivotTypeChange('demand', 'demand_plus_supply')
+    expect(vm.form.version_dates).toEqual([])
+  })
+
+  it('任何 pivot_type 切换都清空 result', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.result = { total_rows: 1 }
+    vm.onPivotTypeChange('demand_plus_supply', 'demand')
+    expect(vm.result).toBeNull()
+  })
+})
+
+describe('v0.5.7 PivotQuery buildRequest 按模式返回 version_dates', () => {
+  it('demand 模式 → version_dates = form.version_dates 数组', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_dates = ['2026-06-29', '2026-07-15']
+    vm.form.years = '2026'
+    const req = vm.buildRequest()
+    expect(req.version_dates).toEqual(['2026-06-29', '2026-07-15'])
+    expect(req.pivot_type).toBe('demand')
+  })
+
+  it('dps 模式 → version_dates = [version_date_single]', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_date_single = '2026-06-29'
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.years = '2026'
+    const req = vm.buildRequest()
+    expect(req.version_dates).toEqual(['2026-06-29'])
+    expect(req.pivot_type).toBe('demand_plus_supply')
+  })
+
+  it('dps 模式 + version_date_single 空 → version_dates = []', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.vendor = 'A'
+    vm.form.item = 'X'
+    vm.form.sub_item = 'Y'
+    vm.form.version_date_single = ''
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.years = '2026'
+    // canQuery 应为 false，buildRequest 仍能调用，但返回空数组（不阻断）
+    const req = vm.buildRequest()
+    expect(req.version_dates).toEqual([])
+  })
+})
+
+describe('v0.5.7 PivotQuery versionDatesForLookup helper', () => {
+  it('demand 模式 → 数组副本', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand'
+    vm.form.version_dates = ['v1', 'v2']
+    expect(vm.versionDatesForLookup()).toEqual(['v1', 'v2'])
+  })
+
+  it('dps 模式 + version_date_single 设置 → 单元素数组', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.version_date_single = 'v1'
+    expect(vm.versionDatesForLookup()).toEqual(['v1'])
+  })
+
+  it('dps 模式 + version_date_single 空 → 空数组', () => {
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.pivot_type = 'demand_plus_supply'
+    vm.form.version_date_single = ''
+    expect(vm.versionDatesForLookup()).toEqual([])
+  })
+})
+
+describe('v0.5.7 PivotQuery onReset 同步清空两个字段', () => {
+  it('重置 version_date_single 清空', () => {
+    getDistinctVendorsMock.mockResolvedValue([])
+    const wrapper = mount(PivotQuery, { global: { stubs: true } })
+    const vm = wrapper.vm
+    vm.form.version_date_single = '2026-06-29'
+    vm.onReset()
+    expect(vm.form.version_date_single).toBe('')
+  })
+})

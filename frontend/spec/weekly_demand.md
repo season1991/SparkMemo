@@ -406,7 +406,7 @@
 
 | 元素 | 说明 |
 |------|------|
-| 固定列（左侧） | 7 列，顺序：`version_date` / country / category / config_code / config_name / data_type / ttl |
+| 固定列（左侧） | 7 列，顺序：`version_date` / country / category / config_code / config_name / data_type / ttl；**列宽详见下表** |
 | 冻结列 | `version_date` 列 `fixed="left"` 首位冻结（横向滚动时版本日期始终可见） |
 | 动态列（右侧） | `result.period_columns` 中每个日期一列（按周为周起始日 YYYY-MM-DD，按日为每天 YYYY-MM-DD） |
 | 交叉点 — 非 0 | `quantity > 0` → 加粗（`font-weight: 600`）+ 深色（`#303133`），class `nonzero-cell` |
@@ -414,6 +414,23 @@
 | 表头 | 结果卡 header 显示：`✓ 查询结果` + tag（N 行 / M 个日期列 / K 个版本 / 按周/按日） |
 | 空数据 | `total_rows === 0` → 居中提示「该筛选条件下无匹配数据。请缩小筛选范围或选择其他时间维度。」 |
 | 滚动 | `el-table` 固定 `height="600"`，水平溢出 `overflow-x: auto` |
+
+**固定列列宽**（v0.5.7.3 起维护）：
+
+| 列 prop | label | 列宽 (px) | 备注 |
+|---|---|---|---|
+| `version_date` | 版本日期 | 110 | v0.5.6 沿用 |
+| `country` | Country | 110 | v0.5.6 沿用 |
+| `category` | Category | 110 | v0.5.6 沿用 |
+| `config_code` | Config Code | 140 | v0.5.6 沿用 |
+| `config_name` | Config Name | 160 | v0.5.6 沿用 |
+| `data_type` | Data Type | **140**（v0.5.7.3 修订：原 90 太窄，`Rolling_TTLGAP` 13 字符无法完整显示，被截为 `...`） | 重点列 |
+| `ttl` | TTL | 60 | v0.5.6 沿用（3 字符够用）|
+
+**列宽计算原则**（v0.5.7.3 新增）：
+- 公式：`列宽 ≥ header label 字符数 × 8px + padding 16px`
+- 修订后 7 列总宽 = 110+110+110+140+160+140+60 = **830px**；窄屏（< 1280px 宽）情况下可横滚出现滚动条
+- 后续如新增 `data_type` 衍生类型（如 `Rolling_TTLGAP_N`）需重新计算 `data_type` 列宽
 | **v0.5.7 新**：行级底色 / 行级 class | 详见 §2.11.3 |
 | **v0.5.7 新**：cell 字体规则（含负数突出） | 详见 §2.11.4 |
 
@@ -428,22 +445,68 @@
 
 > 注意：v0.5.7 之前 `el-radio-button value="demand_plus_supply" :disabled="true"`；本版本起无条件启用。
 
-#### 2.11.2 version_dates 单选联动（v0.5.7 新）
+#### 2.11.2 version_dates 单选联动（v0.5.7.1 修订）
 
-后端 spec §11.1 约束 `pivot_type='demand_plus_supply'` 时 `version_dates` 仅允许 1 个；前端通过 UI 引导避免触发 422：
+后端 spec §11.1 约束 `pivot_type='demand_plus_supply'` 时 `version_dates` 仅允许 1 个。前端采用**双字段互斥**模型，彻底避免 v-model / :multiple 类型不匹配导致的"控件显示 1 个但底层数组 length > 1"bug。
 
-| 触发 | 行为 |
-|------|------|
-| 切到 `demand_plus_supply` 且已选 0 个 | `version_dates` 控件切到单选模式（`el-select :multiple="false"`）；用户照常选 |
-| 切到 `demand_plus_supply` 且已选 1 个 | 控件切单选，已选项保留 |
-| 切到 `demand_plus_supply` 且已选 ≥ 2 个 | toast「Demand+Supply 模式仅支持单个版本日期，请重新选择」；**保留控件里所有已选项 + 仍切单选**；在控件旁显示 `<el-alert type="warning" :closable="false">`「请缩减到 1 个版本日期」直到用户修正；查询按钮在修正前 `disabled` |
-| 切回 `demand` | 控件恢复多选；超 1 个的版本日期保留（不影响 demand 模式） |
+**数据模型**：
 
-实现要点：
-- 控件 `:multiple="form.pivot_type === 'demand'"`（v0.5.7 起变为动态）
-- 计算属性 `versionDatesExceedsOne` = `form.pivot_type === 'demand_plus_supply' && form.version_dates.length > 1`
-- 表单校验 `canQuery` 在 `versionDatesExceedsOne` 为 true 时返回 false
-- `<el-form-item>` 显示上方 `<el-alert>` 提示（与现有 `cascadeHint` 风格一致）
+```js
+const form = reactive({
+  // demand 模式专用：数组（多选）
+  version_dates: [],
+  // demand_plus_supply 模式专用：单值（string）
+  version_date_single: '',
+  pivot_type: 'demand',
+})
+
+// 受控 v-model：computed setter 按 pivot_type 写到不同字段
+const versionDateVModel = computed({
+  get() {
+    return form.pivot_type === 'demand' ? form.version_dates : form.version_date_single
+  },
+  set(v) {
+    if (form.pivot_type === 'demand') {
+      form.version_dates = Array.isArray(v) ? v : []
+    } else {
+      form.version_date_single = typeof v === 'string' ? v : ''
+    }
+  },
+})
+```
+
+模板：
+
+```vue
+<el-select
+  v-model="versionDateVModel"
+  :multiple="form.pivot_type === 'demand'"
+  :collapse-tags="form.pivot_type === 'demand'"
+  ...
+>
+```
+
+**切换模式同步规则**（`onPivotTypeChange(newType, oldType)`）：
+
+| 切换方向 | 同步动作 | 备注 |
+|---|---|---|
+| demand → `demand_plus_supply` | `version_date_single = version_dates[0] \|\| ''`；`version_dates = []` | 数组多余项丢弃，最多保留 1 个 |
+| `demand_plus_supply` → demand | `version_dates = version_date_single ? [version_date_single] : []`；`version_date_single = ''` | 单值塞入数组，保证多选模式至少 1 个 |
+| 任何切换 | `result = null` | 避免展示过期透视表 |
+| 任何切换（`oldType` 非空）| `ElMessage.success('已切换到 X 模式')` | 用户感知模式变更 |
+
+**校验**：`canQuery` 按 pivot_type 检查不同字段：
+
+```js
+const hasVersion =
+  form.pivot_type === 'demand'
+    ? form.version_dates.length >= 1
+    : form.version_date_single !== ''
+```
+
+**buildRequest** 同步规则：dps 模式 → `version_dates = [version_date_single]`；demand 模式 → `version_dates = form.version_dates.slice()`。
+
+> v0.5.7 早期版本曾尝试"同一数组字段 + 切换 :multiple + 检测 length>1 警告"，导致 Element Plus 单选模式下回显与数据不一致，已修复。详见 §8 v0.5.7.1 修订记录。
 
 #### 2.11.3 视觉分组规范 — 行级底色（v0.5.7 新）
 
@@ -477,18 +540,29 @@ function getRowClass({ row }) {
 ```
 
 ```css
-/* PivotQuery.vue <style scoped> — v0.5.7 追加 */
-/* 用 > td !important 压住 Element Plus 默认 hover 高亮 */
-.pivot-view .el-table__body tr.row--ds-base > td { background-color: #ecf5ff !important; }
-.pivot-view .el-table__body tr.row--ttl-gap > td { background-color: #fdf6ec !important; }
-.pivot-view .el-table__body tr.row--rolling > td { background-color: #fef0f0 !important; }
-.pivot-view .el-table__body tr.row--ttl-gap > td.zero-cell,
-.pivot-view .el-table__body tr.row--rolling > td.zero-cell,
-.pivot-view .el-table__body tr.row--ttl-gap > td.cell-negative,
-.pivot-view .el-table__body tr.row--rolling > td.cell-negative { color: inherit; }  /* cell 颜色仍由 cell 自身决定 */
+/* PivotQuery.vue <style scoped> — v0.5.7.2 修订 */
+
+/* 【v0.5.7.2 关键约束】
+ * Vue <style scoped> 会给每个选择器末尾追加 [data-v-XXX] 属性。
+ * el-table / tr / td 都是 Element Plus 子组件渲染出来的 DOM，不带本组件的 data-v-XXX，
+ * 写 .pivot-view .el-table__body tr.row--xxx > td { ... } 会因末尾 [data-v-XXX] 匹配不上而整条规则失效。
+ * 必须用 :deep() 把穿透部分包裹起来，让 [data-v-XXX] 只挂在最外层本组件选择器上。
+ * 参考：本项目 Dashboard.vue:319 已用 :deep() 写同类行级样式。
+ */
+.pivot-view :deep(.el-table__body tr.row--ds-base > td)   { background-color: #ecf5ff !important; }
+.pivot-view :deep(.el-table__body tr.row--ttl-gap > td)   { background-color: #fdf6ec !important; }
+.pivot-view :deep(.el-table__body tr.row--rolling > td)   { background-color: #fef0f0 !important; }
+
+/* 行底色不覆盖 cell 文本颜色（cell 文本仍按 zero-cell / nonzero-cell / cell-negative 决定）*/
+.pivot-view :deep(.el-table__body tr.row--ttl-gap > td.zero-cell),
+.pivot-view :deep(.el-table__body tr.row--rolling > td.zero-cell),
+.pivot-view :deep(.el-table__body tr.row--ttl-gap > td.cell-negative),
+.pivot-view :deep(.el-table__body tr.row--rolling > td.cell-negative) { color: inherit; }
 ```
 
 > **悬停降级**：因底色已用 `!important`，鼠标 hover 时元素颜色保持不变（避免视觉跳动）。如未来需要 hover 信息，可在 `<tr>` 上加 `title` 属性。
+>
+> **v0.5.7 漏写 `:deep()` 的回退**：v0.5.7 原写法（无 `:deep()`）在编译后整条规则被 Element Plus 子组件 DOM 过滤掉，导致三个底色完全不生效，肉眼只剩 `stripe` 默认浅灰交替；spec §2.11.3 v0.5.7 章节内容已在 v0.5.7.2 修正，详见 §8 修订记录。
 
 #### 2.11.4 cell 字体规则（v0.5.7 新）
 
@@ -591,9 +665,8 @@ function getCellClass(row, periodDate) {
 | 透视查询 — 级联提示（weeks 缺 years+months） | 「已选择 weeks，请同时选择 years 与 months」 |
 | 透视查询 — 级联提示（months 缺 years） | 「已选择 months，请同时选择 years」 |
 | 透视查询 — 级联提示（无时间维度） | 「请至少选择一个时间维度（years / months / weeks）」 |
-| **v0.5.7 透视查询** — 切换到 Demand+Supply 模式（已查询过） | 「已切换到 Demand+Supply 模式」 |
-| **v0.5.7 透视查询** — 切换回 Demand 模式（已查询过） | 「已切换到 Demand 模式」 |
-| **v0.5.7 透视查询** — `demand_plus_supply` 下选了 >1 个版本日期 | toast「Demand+Supply 模式仅支持单个版本日期」 + 表单上方 `<el-alert>`「请缩减到 1 个版本日期」直到修正 |
+| **v0.5.7 透视查询** — 切换到 Demand+Supply 模式 | 「已切换到 Demand+Supply 模式」 |
+| **v0.5.7 透视查询** — 切换回 Demand 模式 | 「已切换到 Demand 模式」 |
 
 ---
 
@@ -686,8 +759,15 @@ function getCellClass(row, periodDate) {
 | 无数据 | `total_rows === 0` → 空提示文案 |
 | 重置 | 所有 form 字段清空；所有 options 清空；result 清空；重新加载 vendors |
 | **v0.5.7 新**：`pivot_type` radio 切换 | `demand_plus_supply` 单选框可点击（去除 `:disabled`）|
-| **v0.5.7 新**：切换到 `demand_plus_supply` 后 version_dates 控件变单选 | `el-select :multiple` 属性值为 `false`（按 `form.pivot_type === 'demand'` 计算）|
-| **v0.5.7 新**：切到 `demand_plus_supply` 时已选 ≥ 2 个版本日期 | 顶部 `<el-alert>` 出现，toast「Demand+Supply 模式仅支持单个版本日期」；查询按钮 `disabled` |
+| **v0.5.7.1 修订**：表单字段拆分 | `form.version_dates: string[]`（demand 模式）+ `form.version_date_single: string`（dps 模式），两个字段互斥使用 |
+| **v0.5.7.1 修订**：受控 v-model 桥接 | `versionDateVModel` computed setter 按 pivot_type 写到正确字段；demand 模式 set 数组 / dps 模式 set string |
+| **v0.5.7.1 修订**：受控 v-model 防御 | demand 模式 setter 收到非数组 → 写空数组；dps 模式 setter 收到非字符串 → 写空字符串 |
+| **v0.5.7.1 修订**：demand → dps 同步 | onPivotTypeChange 取 `version_dates[0]` 到 `version_date_single`；数组清空 |
+| **v0.5.7.1 修订**：dps → demand 同步 | 单值塞入 `version_dates` 数组；`version_date_single` 清空 |
+| **v0.5.7.1 修订**：canQuery 按模式 | demand 检查 `version_dates.length >= 1`；dps 检查 `version_date_single !== ''` |
+| **v0.5.7.1 修订**：buildRequest 按模式 | demand → version_dates 数组副本；dps → `[version_date_single]` |
+| **v0.5.7.1 修订**：versionDatesForLookup helper | demand → 数组副本；dps → `[version_date_single]`（dps 模型仍能为空，lookup 自然短路）|
+| **v0.5.7.1 修订**：onReset 同时清空两字段 | `form.version_date_single = ''` |
 | **v0.5.7 新**：`getRowClass` 对 Demand / Supply 行返回 `'row--ds-base'` | 行元素 class 含 `row--ds-base` |
 | **v0.5.7 新**：`getRowClass` 对 TTL_GAP 行返回 `'row--ttl-gap'` | 行元素 class 含 `row--ttl-gap` |
 | **v0.5.7 新**：`getRowClass` 对 Rolling_TTLGAP 行返回 `'row--rolling'` | 行元素 class 含 `row--rolling` |
@@ -695,6 +775,8 @@ function getCellClass(row, periodDate) {
 | **v0.5.7 新**：`getCellClass` 对 Rolling_TTLGAP 行的负数量返回 `'cell-negative'` | cell 元素 class 含 `cell-negative` |
 | **v0.5.7 新**：`getCellClass` 对 Demand / Supply 行的非负数量返回 `zero-cell` / `nonzero-cell`（不返回 `cell-negative`）| 行为完全沿用 v0.5.6 |
 | **v0.5.7 新**：行级 css 压制 hover | `.row--ttl-gap > td` 实际渲染背景色为 `#fdf6ec`（用 `getComputedStyle` 校验 `background-color`）|
+| **v0.5.7.2 修订**：3 条 `background-color` 规则必须在 `:deep()` 选择器块内（防止 v0.5.7 漏写 `:deep()` 导致 scoped 规则失效的回归）| 静态扫描 `PivotQuery.vue` 源文件：每条 `#fdf6ec / #fef0f0 / #ecf5ff !important` 规则对应的选择器必须以 `:deep(` 包裹子组件部分 |
+| **v0.5.7.3 修订**：`data_type` 列宽 = 140（防止回到旧值 90 导致 `Rolling_TTLGAP` 被截断）| 静态扫描 `PivotQuery.vue`：`prop: 'data_type'` 行 80 字符内必须出现 `width: 140`；`data_type` 行不得出现 `width: 90` |
 
 ---
 
@@ -743,13 +825,18 @@ function getCellClass(row, periodDate) {
 - [x] 透视查询页：cascadeHint 级联提示正确显示
 - [x] **v0.5.7**：透视查询页 `pivot_type` 单选可点击 `demand_plus_supply`（去除 `:disabled`）
 - [x] **v0.5.7**：切到 `demand_plus_supply` 后 `version_dates` 控件改为单选
-- [x] **v0.5.7**：切到 `demand_plus_supply` 前已选 ≥ 2 个版本日期时，顶部 `<el-alert>` 提示 + 查询按钮 disabled
+- [x] **v0.5.7.1 修订**：受控 v-model 按 pivot_type 把数据写入 `version_dates` / `version_date_single` 互斥字段（不再"同一数组字段切换 :multiple"，彻底消除"UI 看着 1 个但底层 length > 1"bug）
+- [x] **v0.5.7.1 修订**：demand → dps 时 `version_date_single = version_dates[0]`；dps → demand 时 `version_dates = [version_date_single]`
+- [x] **v0.5.7.1 修订**：`canQuery` / `buildRequest` 按 pivot_type 检查 / 构造对应字段
+- [x] **v0.5.7.1 修订**：删除 `versionDatesExceedsOne` computed 与 `<el-alert>` 提示（v0.5.7 旧版残留，已不再需要）
+- [x] **v0.5.7.2 修订**：npm run dev → 打开 `/pivot-query` → 切到 `pivot_type='demand_plus_supply'` → 选版本 → 查 → 肉眼确认 TTL_GAP / Rolling_TTLGAP 两行底色分别为 `#fdf6ec` / `#fef0f0`（jsdom 不能验真实渲染，需手动烟雾测试）
 - [x] **v0.5.7**：Demand / Supply 行 `getComputedStyle().backgroundColor === 'rgb(236, 245, 255)'`（即 `#ecf5ff`）
 - [x] **v0.5.7**：TTL_GAP 行 `backgroundColor === 'rgb(253, 246, 236)'`（即 `#fdf6ec`）
 - [x] **v0.5.7**：Rolling_TTLGAP 行 `backgroundColor === 'rgb(254, 240, 240)'`（即 `#fef0f0`）
 - [x] **v0.5.7**：TTL_GAP 负数量 cell class 含 `cell-negative`，computed `color === 'rgb(245, 108, 108)'` + `fontWeight === '700'`
 - [x] **v0.5.7**：Rolling_TTLGAP 负数量 cell class 含 `cell-negative`
 - [x] **v0.5.7**：Demand / Supply 行非负 cell class 仅 `zero-cell` / `nonzero-cell`（无 `cell-negative`）
+- [x] **v0.5.7.3 修订**：npm run dev → 打开 `/pivot-query` → 切到 `pivot_type='demand_plus_supply'` → 查 → 肉眼确认 `Data Type` 列中 `Rolling_TTLGAP` header 与 cell 完整显示（不被 `...` 截断，需手动烟雾测试）
 
 ---
 
@@ -766,6 +853,9 @@ function getCellClass(row, periodDate) {
 | v0.5.7 | §5.6 | 新增 11 个测试用例（含 pivot_type radio / version_dates 单选 / getRowClass / getCellClass / css 渲染）|
 | v0.5.7 | §6 | 删除原 "demand_plus_supply UI 上 disabled" 一项；新增"行级底色不随主题切换"明确说明 |
 | v0.5.7 | §7 | 追加 9 条视觉验证项（含 3 色 hex 与 `cell-negative` rgb + fontWeight）|
+| **v0.5.7.1** | §2.11.2 / §4 / §5.6 / §7 / §8 | **fix `version_date_single` 表单字段拆分 + 受控 v-model 桥接**：v0.5.7 旧版"同一数组字段 + 切换 :multiple + length 检测"在 Element Plus 单选模式下出现"UI 看着选了 1 个但底层数组 length > 1"bug，用户报"明明选了 1 个版本日期仍提示多版本"。修复：`form.version_dates: string[]`（demand 模式）+ `form.version_date_single: string`（dps 模式）双字段互斥；`versionDateVModel` computed setter 按 pivot_type 写入正确字段；`onPivotTypeChange` 同步两个字段；删除 `versionDatesExceedsOne` 与 `<el-alert>`；OpenAPI / 后端无改动 |
+| **v0.5.7.2** | §2.11.3 / §5.6 / §7 | **fix 行级底色 `:deep()` 缺失**：v0.5.7 实施时复制 spec §2.11.3 原 CSS 片段，但 spec 该片段未加 `:deep()`，Vue scoped 编译后末尾 `[data-v-XXX]` 选择器无法命中 Element Plus 子组件的 `<td>`，导致 `#fdf5ec / #fef0f0 / #ecf5ff` 三色全部失效（用户报告"TTL_GAP 和 Rolling_TTLGAP 底色没变"）。修复：spec §2.11.3 重写实现片段，加 `:deep()` 穿透 + 注明「scoped 与子组件 DOM」约束；`PivotQuery.vue` 同步改造；新增一条静态源文件检查 + 一条手动烟雾测试项（jsdom 无法验真实渲染）|
+| **v0.5.7.3** | §2.11 / §5.6 / §7 | **fix `data_type` 列宽 90 → 140**：v0.5.7 实施时 `fixedColumns` 中 `data_type` width 设为 90，无 spec 依据；实测 `Rolling_TTLGAP` 13 字符在 90px 列宽下被截为 `...`。修复：spec §2.11 新加「固定列列宽」表 + 「列宽计算原则」公式（`列宽 ≥ label 字符数 × 8px + padding 16px`）；`PivotQuery.vue` data_type width 90 改 140；新增 1 条静态源文件检查 + 1 条手动烟雾测试项 |
 | **v0.5.6** | 头部 / §1.1 / §1.4 / §2.11 / §3 / §4 / §5 / §6 / §7 / §8 | **新增透视查询子模块**：路由 `/pivot-query`；`PivotQuery.vue` + `api/pivot_query.js`；Hub 卡片从 3→4 张；错误码/状态文案/测试计划/不实现组件/验证清单同步更新 |
 | v0.5.6 | §2.11 | 透视查询完整功能点：三组筛选（必填定位 + 业务行级联 + 时间维度）+ 透视表渲染 + 级联提示 + 重置 |
 | v0.5.6 | §5.5 / §5.6 | 新增 API 层 + View 层测试计划（覆盖级联、buildRequest、cellQty、onQuery、onReset、loadWeeks） |
