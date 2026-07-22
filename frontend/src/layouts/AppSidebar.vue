@@ -7,12 +7,13 @@
  * 版本演进：
  * - v0.3 email_config 模块新增「邮箱配置」第三项；
  * - v0.5.1 dsp_upload 模块在「任务管理」「邮箱配置」之间插入「DSP 上传」。
+ * - v0.1.0（html_to_excel）在「邮箱配置」之下插入「HTML 转 Excel」（Document icon）。
  *
  * 其余旧路径（/tasks/today / /settings）保留可达但不在此处显示。
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, List, Message, Upload } from '@element-plus/icons-vue'
+import { DataAnalysis, Document, List, Message, Upload } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,7 +22,8 @@ const navItems = [
   { name: '今日概述', icon: DataAnalysis, to: '/' },
   { name: '任务管理', icon: List, to: '/tasks' },
   { name: '周需求管理', icon: Upload, to: '/dsp-uploads' },
-  { name: '邮箱配置', icon: Message, to: '/email-config' }
+  { name: '邮箱配置', icon: Message, to: '/email-config' },
+  { name: 'HTML 转 Excel', icon: Document, to: '/html-to-excel' }
 ]
 
 const activeTo = computed(() => route.path)

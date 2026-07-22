@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>nested_table</title></head>
+<body>
+<h1>嵌套表测试</h1>
+
+<!-- 外层表：真实数据 -->
+<table id="outer_table" border="1">
+  <thead>
+    <tr>
+      <th>项目</th>
+      <th>详情</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>项目 A</td>
+      <td>
+        <!-- 内嵌子表：应被跳过 -->
+        <table border="1">
+          <tbody>
+            <tr><td>子项 1</td><td>v1</td></tr>
+            <tr><td>子项 2</td><td>v2</td></tr>
+          </tbody>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td>项目 B</td>
+      <td>
+        <table border="1">
+          <tbody>
+            <tr><td>子项 1</td><td>only row</td></tr>
+          </tbody>
+        </table>
+      </td>
+    </tr>
+  </tbody>
+</table>
+</body>
+</html>

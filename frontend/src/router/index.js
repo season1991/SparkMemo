@@ -14,6 +14,7 @@ import DspUpload from '../views/DspUpload.vue'
 import WeeklyDemandQuery from '../views/WeeklyDemandQuery.vue'
 import WeeklyDemandDelete from '../views/WeeklyDemandDelete.vue'
 import PivotQuery from '../views/PivotQuery.vue'
+import HtmlToExcel from '../views/HtmlToExcel.vue'
 
 const routes = [
   {
@@ -70,6 +71,12 @@ const routes = [
     name: 'EmailConfig',
     component: EmailConfig,
     meta: { title: '邮箱配置' }
+  },
+  {
+    path: '/html-to-excel',
+    name: 'HtmlToExcel',
+    component: HtmlToExcel,
+    meta: { title: 'HTML 转 Excel' }
   },
   {
     path: '/settings',

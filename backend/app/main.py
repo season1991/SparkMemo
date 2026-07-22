@@ -12,6 +12,7 @@ from app.api import (
     dsp_uploads,
     email_config,
     email_send,
+    html_to_excel,
     pivot_query,
     pivot_query_lookups,
     projects,
@@ -118,3 +119,4 @@ app.include_router(email_send.router)
 app.include_router(dsp_uploads.router)
 app.include_router(pivot_query.router)
 app.include_router(pivot_query_lookups.router)
+app.include_router(html_to_excel.router)
