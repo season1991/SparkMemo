@@ -78,6 +78,7 @@ frontend/
 | 任务管理模块 | [./task_management.md](./task_management.md) |
 | 公司 / 项目管理模块 | [./company_project.md](./company_project.md) |
 | 周需求管理模块（v0.5.4：DSP 上传 / 查询 / 删除） | [./weekly_demand.md](./weekly_demand.md) |
+| 跨表数据填充模块（v0.6.0：4 步向导式单页 ETL） | [./cross_table_fill.md](./cross_table_fill.md) |
 
 ---
 

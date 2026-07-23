@@ -15,6 +15,7 @@ import WeeklyDemandQuery from '../views/WeeklyDemandQuery.vue'
 import WeeklyDemandDelete from '../views/WeeklyDemandDelete.vue'
 import PivotQuery from '../views/PivotQuery.vue'
 import HtmlToExcel from '../views/HtmlToExcel.vue'
+import CrossTableFill from '../views/CrossTableFill.vue'
 
 const routes = [
   {
@@ -83,6 +84,13 @@ const routes = [
     name: 'Settings',
     component: Settings,
     meta: { title: '设置' }
+  },
+  {
+    // v0.6.0：跨表数据填充（ETL 单页 4 步向导）
+    path: '/cross-table-fill',
+    name: 'CrossTableFill',
+    component: CrossTableFill,
+    meta: { title: '跨表数据填充' }
   }
 ]
 
