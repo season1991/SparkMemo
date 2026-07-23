@@ -599,7 +599,7 @@ def build_xlsx(headers: list[str], rows: list[list]) -> bytes:
 | 409 | 同 job_id 已 `executed` 且不允许重跑 / overwrite mapping 时缺 confirm_token / new_column only 时传 confirm_token / download 请求时 job.status != 'executed' |
 | 413 | target_file / base_file 任一 > 20 MB |
 | 415 | target_file / base_file 任一 MIME 非 `.xlsx` |
-| 422 | 表头为空 / 表头重复名；config 入参：target_keys / base_keys / mappings / 任一字段不在对应 headers；keys 等长校验失败；mode 取值非法；join_mode / match_mode 取值非法；case_sensitive / trim_strings 缺省；Excel 工作簿无 sheet；首行无任何 cell |
+| 422 | 表头为空 / 表头重复名；config 入参：target_keys / base_keys / 任一字段不在对应 headers；keys 等长校验失败；mode 取值非法；join_mode / match_mode 取值非法；case_sensitive / trim_strings 缺省；mapping.base_field 不在 base_headers；**mapping.target_field（v0.6.0.1.0 按 mode 分支校验）**：`mode='overwrite'` 时不在 target_headers → 422；`mode='new_column'` 时为空字符串 → 422（不再要求在 target_headers 中；允许与现有列同名，execute 阶段会加 `_filled` 后缀）；Excel 工作簿无 sheet；首行无任何 cell |
 
 > Pydantic 自动 422 与手动抛 422 共存；按既有约定（spec §5.3）返回中文 detail。
 
@@ -644,8 +644,11 @@ def build_xlsx(headers: list[str], rows: list[list]) -> bytes:
 - 422：target_keys 含不存在字段 → 422；
 - 422：base_keys 长度与 target_keys 不等 → 422 + detail `"target_keys and base_keys must have equal length"`；
 - 422：mapping.base_field 不在 base_headers → 422；
-- 422：mapping.target_field 不在 target_headers → 422；
 - 422：mapping.mode 取值非法（如 `"append"`）→ 422；
+- **422（v0.6.0.1.0 按 mode 分支校验 target_field）**：
+  - `mode='overwrite'` + target_field 不在 target_headers → 422 + detail `"mappings.target_field '<name>' not in target_headers (mode='overwrite' requires existing column)"`
+  - `mode='new_column'` + target_field 为空字符串 → 422 + detail `"mappings.target_field must be a non-empty string (mode='new_column')"`
+  - `mode='new_column'` + target_field 不在 target_headers（自由输入的新列名）→ 200；warnings 阶段处理 `_filled` 后缀
 - 409：mapping 含 `overwrite` 但缺 `confirm_token` → 409 + 中文 detail；
 - 409：mapping 全为 `new_column` 但 `confirm_token` 非 None → 409；
 - warnings：target_keys 在 target 表有 N 个空键值行 → 200 + warnings 含 `"target_keys 在 target 表有 N 个空键值行…"`。
@@ -698,7 +701,7 @@ def build_xlsx(headers: list[str], rows: list[list]) -> bytes:
 ## Assumptions
 
 1. **单用户本地版**维持不变：不引入登录、不引入多租户；
-2. **同库同 schema**：复用现有 MySQL `sparkmemo`；新表由 `Base.metadata.create_all` 自动创建，老库走幂等 `CREATE TABLE IF NOT EXISTS`；
+2. **同库同 schema**：复用现有 MySQL `sparkmemo`；**3 张新增表（cross_table_fill_jobs / cross_table_fill_rows / cross_table_fill_configs）走手工 SQL 建表**，DDL 全部汇总于 `backend/sql/dev_sql.sql`（详见项目级规范 spec/README.md §4）。app lifespan **不**自动调 `Base.metadata.create_all`。测试环境（SQLite）由 `tests/conftest.py` 显式 `create_all` 兜底，与生产解耦。
 3. **新依赖**：项目已含 `openpyxl` / `pandas` / `fastapi` / `pydantic`，无需新增 pip 包；如未来引入 `python-dotenv` 通用配置已在用；
 4. **CASCADE**：删除 `cross_table_fill_jobs` 自动级联删 `cross_table_fill_rows` 与 `cross_table_fill_configs`（SQLAlchemy `cascade="all, delete-orphan"` + DB 端 `ON DELETE CASCADE`）；
 5. **跨表 schema 差异**：base 比 target 字段多就忽略（无匹配 base_field 不报错）；target 比 base 字段多就仅作 target 原列保留，不主动填空；
@@ -741,3 +744,43 @@ def build_xlsx(headers: list[str], rows: list[list]) -> bytes:
 - 默认 `join_mode='left'`（VLOOKUP 语义）+ `match_mode='merge_multi'`（多匹配值用 `;` 拼接并计入 `multi_match_count`）；
 - mapping.mode 强制显式 `overwrite` / `new_column`，`overwrite` 模式强制 `confirm_token` 二次确认；
 - 24h 任务过期；CASCADE 清理。
+
+### v0.6.0.0.2（hot fix：缺表 500 → 手工建表）
+
+**修复前的 bug**：用户首次部署到 MySQL `sparkmemo` 时，第 1 步上传两张表成功后，INSERT 阶段报 `pymysql.err.ProgrammingError: (1146, "Table 'sparkmemo.cross_table_fill_jobs' doesn't exist")` → 500 Internal Server Error。
+
+**根因**：本模块首次发布依赖「`Base.metadata.create_all` 自动建表」假设，但**生产 MySQL 实例的 app lifespan 阶段从未调过 create_all**（参考 `spec/email_notification.md:88` 早期预警）；3 张新表既非自动建，也无手工 DDL，导致首次 POST 即报缺表。
+
+**修复**：
+- 新建 `backend/sql/dev_sql.sql`（**项目级硬约束**：所有手工 DDL 单一汇总点），含 v0.6.0 三张表完整 `CREATE TABLE IF NOT EXISTS`（含 COMMENT、FK + ON DELETE CASCADE、索引）；
+- 项目级规范在 `spec/README.md §4` 落地（**所有表走手工 SQL，不再依赖 ORM 自动建表**）；
+- 本模块 §Assumption 2 改文本，指向 `dev_sql.sql` 并明确禁止 app 自动 create_all；
+- 测试环境（SQLite）由 `tests/conftest.py:53` 显式 `create_all` 兜底，与生产 MySQL 解耦；
+- 附最终一致性检查：人工 `mysql < dev_sql.sql` 后，模型层 `Base.metadata.create_all` 不会触发 DROP / ALTER，幂等。
+
+**配套修改**：
+- `backend/sql/dev_sql.sql` 新增文件；
+- `backend/spec/README.md` 新增 §4 数据库表手工建表规范（v0.6.0 起全局硬约束）；
+- `backend/spec/email_notification.md` 段落增加 `dev_sql.sql` 引用；
+- `backend/tests/conftest.py` 维持 `Base.metadata.create_all`（测试 SQLite 兜底，与生产 MySQL 解耦）；
+- 无代码逻辑改动（app 端**不**做自动 create_all；运维手工跑 SQL）。
+
+### v0.6.0.1.0（PATCH /config 422：target_field 校验按 mode 分支）
+
+**修复前的 bug**：用户在前端 Step 2 配置 mapping 时选 `mode='new_column'`，输入新列名（不在 target_headers 中，例如「新部门」「new_dept」），点「下一步」PATCH `/api/cross-table-fill/jobs/{id}/config`，后端返回 `422 Unprocessable Entity`，detail：`mappings.target_field '新部门' not in target_headers`。
+
+**根因**：与前端 v0.6.0.1.0 行为变更配套不齐 —— 前端允许「新增列」模式下自由输入新列名，但后端 `_validate_config` 仍硬性要求 `mappings[].target_field` 必须在 `target_headers` 中。两者语义错位，导致 Step 2 永远无法提交。
+
+**修复**：在 `backend/app/api/cross_table_fill.py::_validate_config` 内按 `mode` 分支校验 `target_field`：
+
+| mode | target_field 校验规则 | 错误码 |
+|------|----------------------|--------|
+| `overwrite` | 必须严格存在于 `target_headers`（覆盖既有列必须指向具体列） | 422 if not in headers |
+| `new_column` | 仅校验非空；可与 target_headers 同名（execute 阶段加 `_filled` 后缀；warnings 提示用户） | 422 if empty string |
+
+**配套修改**：
+- `backend/app/api/cross_table_fill.py::_validate_config` 函数体重构（line 248-272）；
+- `backend/spec/cross_table_fill.md` §错误约定 422 行追加 v0.6.0.1.0 分支校验说明；
+- `backend/spec/cross_table_fill.md` §Test Plan §2 PATCH /config 追加 4 条新用例；
+- `backend/tests/test_cross_table_fill.py` 追加对应测试用例；
+- 与前端 v0.6.0.1.0（mode 切换 + target_field 自由输入）配套。

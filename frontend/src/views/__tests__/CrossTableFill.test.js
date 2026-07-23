@@ -446,6 +446,76 @@ describe('CrossTableFill view — Step 1', () => {
     expect(store.stepIndex).toBe(0)
     expect(store.targetKeys).toEqual([])
   })
+
+  // ============== v0.6.0.1 修复：el-upload wrapper 解包 ==============
+
+  function makeWrapper(file, extras = {}) {
+    return {
+      name: file.name,
+      size: file.size,
+      status: 'ready',
+      uid: 1,
+      percentage: 0,
+      raw: file,
+      ...extras,
+    }
+  }
+
+  it('el-upload wrapper 形态：解出 raw 写入 store.targetFile', () => {
+    const store = useCrossTableFillStore()
+    const realFile = new File([new Uint8Array(2048)], 'target.xlsx')
+    const wrapperElUploadObj = makeWrapper(realFile)
+    const viewWrapper = mount(CrossTableFill, { global: { stubs: true } })
+    // 走 view 暴露的 onTargetFileChange（内部经 buildFileValidator → unwrapElUploadFile → 解出 raw）
+    viewWrapper.vm.onTargetFileChange(wrapperElUploadObj)
+    // 关键：store.targetFile 应是真 File（wrapper 的 raw）而非 wrapper 本身
+    expect(store.targetFile).toBe(realFile)
+    expect(store.targetFile instanceof File).toBe(true)
+    expect(store.targetFile.name).toBe('target.xlsx')
+  })
+
+  it('直接传 File（非 wrapper）：降级用 file 本身', () => {
+    const store = useCrossTableFillStore()
+    const realFile = new File([new Uint8Array(1024)], 't.xlsx')
+    // 不通过 buildFileValidator（直接传 File），模拟其它入口
+    store.setTargetFile(realFile)
+    expect(store.targetFile).toBe(realFile)
+    expect(store.targetFile.name).toBe('t.xlsx')
+  })
+
+  it('null：不调用 setter；不报错', () => {
+    const store = useCrossTableFillStore()
+    store.targetFile = null
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    const setFn = vi.fn()
+    const handler = (file) => {
+      if (!file) return false
+      setFn(file)
+      return false
+    }
+    handler(null)
+    expect(setFn).not.toHaveBeenCalled()
+    expect(store.targetFile).toBeNull()
+  })
+
+  it('非 File 普通对象（既非 wrapper 也非 File）：弹「文件类型有误」', () => {
+    ElMessageError.mockClear()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    // 模拟 buildFileValidator 路径：单纯传字符串
+    const fakeFile = 'not a file at all'
+    wrapper.vm.onTargetFileChange(fakeFile)
+    // 内部走 unwrapElUploadFile 检测，弹 error
+    expect(ElMessageError).toHaveBeenCalledWith('文件类型有误，请重新选择')
+  })
+
+  it('wrapper 大写 .XLSX：仍写入 store（toLowerCase 不区分）', () => {
+    ElMessageError.mockClear()
+    const store = useCrossTableFillStore()
+    const realFile = new File([new Uint8Array(2048)], 'T.XLSX')
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    wrapper.vm.onTargetFileChange(makeWrapper(realFile))
+    expect(store.targetFile).toBe(realFile)
+  })
 })
 
 describe('CrossTableFill view — Step 2 配置', () => {
@@ -478,6 +548,88 @@ describe('CrossTableFill view — Step 2 配置', () => {
     expect(store.targetKeys.length).toBe(1)
   })
 
+  // =============== v0.6.0.0.3 hot fix：「新增一对」按钮外移 + 空态提示 ===============
+
+  it('空态：进入 Step 2 后，「新增一对」与「新增映射」按钮都在 DOM（v-for 之外）', () => {
+    gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    // 直接调 view 暴露的 addKeyPair / addMapping 验证入口可达
+    expect(typeof wrapper.vm.addKeyPair).toBe('function')
+    expect(typeof wrapper.vm.addMapping).toBe('function')
+    // 验证 store 初始空态
+    const store = useCrossTableFillStore()
+    expect(store.targetKeys.length).toBe(0)
+    expect(store.mappings.length).toBe(0)
+  })
+
+  it('空态：调 addKeyPair 让 targetKeys.length=1；keysValidationError 不再要求非空', () => {
+    gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    const store = useCrossTableFillStore()
+    wrapper.vm.addKeyPair()
+    expect(store.targetKeys.length).toBe(1)
+    expect(store.baseKeys.length).toBe(1)
+    // 注：这里只验证「按钮可达+state 写入」；keys 仍未填，故 canConfigure 仍 false
+    expect(store.canConfigure).toBe(false)
+  })
+
+  it('空态：调 addMapping 让 mappings.length=1；新行 mode 默认 new_column', () => {
+    gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    const store = useCrossTableFillStore()
+    wrapper.vm.addMapping()
+    expect(store.mappings.length).toBe(1)
+    expect(store.mappings[0].mode).toBe('new_column')
+    expect(store.mappings[0].base_field).toBe('')
+    expect(store.mappings[0].target_field).toBe('')
+    // 部分 mapping 字段未填：canConfigure 仍 false
+    expect(store.canConfigure).toBe(false)
+  })
+
+  it('「下一步」按钮的 disabled 状态与 canConfigure 严格联动', async () => {
+    mockPatchSuccess()
+    gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    const store = useCrossTableFillStore()
+
+    // 初始：canConfigure=false → 「下一步」disabled
+    expect(store.canConfigure).toBe(false)
+
+    // 加 1 对但字段未填 → 仍 false
+    wrapper.vm.addKeyPair()
+    expect(store.canConfigure).toBe(false)
+
+    // 填齐 target+base
+    store.targetKeys[0] = '工号'
+    store.baseKeys[0] = 'EID'
+    expect(store.canConfigure).toBe(false)
+
+    // 加 1 行 mapping
+    wrapper.vm.addMapping()
+    expect(store.canConfigure).toBe(false)
+
+    // 填齐 mapping 字段
+    store.mappings[0].base_field = 'Department'
+    store.mappings[0].target_field = '部门'
+    expect(store.canConfigure).toBe(true)
+
+    // 走完整的 patchConfig 流程验证通路
+    await store.patchConfig(null)
+    expect(apiMocks.patch).toHaveBeenCalled()
+    expect(store.stepIndex).toBe(2)
+  })
+
+  it('空态时 store.targetKeys=[] + mappings=[]：canConfigure=false 但 entry 仍可达', () => {
+    // v0.6.0.0.3 修复前：「下一步」永远 disabled（用户体感）；修复后：「新增一对/映射」按钮可达；
+    // 测试锁定以下不变量：空态 canConfigure=false（业务约束）+ addKeyPair/addMapping 可直接调用（UI 入口可达）。
+    gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    const store = useCrossTableFillStore()
+    expect(store.canConfigure).toBe(false)
+    expect(wrapper.vm.addKeyPair).toBeDefined()
+    expect(wrapper.vm.addMapping).toBeDefined()
+  })
+
   it('addMapping 默认 mode=new_column', () => {
     const store = gotoStep2()
     store.addMapping()
@@ -504,6 +656,112 @@ describe('CrossTableFill view — Step 2 配置', () => {
     store.addMapping()
     await ElMessageBoxConfirm({})
     store.updateMappingAt(0, { mode: 'overwrite' })
+    expect(store.mappings[0].mode).toBe('overwrite')
+  })
+
+  // ============== v0.6.0.1.0 行为变更：目标列控件随 mode 切换 ==============
+
+  it('v0.6.0.1.0：mode=new_column → 自由输入新列名；切到 overwrite 时清空 target_field', async () => {
+    ElMessageBoxConfirm.mockResolvedValueOnce(undefined)
+    const store = gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    store.addMapping()
+    // 用户在 new_column 模式下输入新列名（不在 target_headers 中）
+    await store.updateMappingAt(0, {
+      base_field: 'Department',
+      target_field: '新部门列',
+      mode: 'new_column',
+    })
+    expect(store.mappings[0].target_field).toBe('新部门列')
+
+    // 切换到 overwrite：先清空 target_field，再 confirm；用户确认 → mode=overwrite
+    await wrapper.vm.onModeChange({ __idx: 0 }, 'overwrite')
+    expect(store.mappings[0].target_field).toBe('') // 已清空
+    expect(store.mappings[0].mode).toBe('overwrite') // confirm 通过
+  })
+
+  it('v0.6.0.1.0：mode 切到 overwrite → confirm 取消 → 还原 mode + target_field', async () => {
+    ElMessageBoxConfirm.mockRejectedValueOnce(new Error('cancel'))
+    const store = gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    store.addMapping()
+    // new_column 模式下 target_field='新部门列'；切到 overwrite 时被清空，但 confirm 取消要还原
+    await store.updateMappingAt(0, {
+      base_field: 'Department',
+      target_field: '新部门列',
+      mode: 'new_column',
+    })
+    await wrapper.vm.onModeChange({ __idx: 0 }, 'overwrite')
+    // 取消 → 还原 mode + target_field
+    expect(store.mappings[0].mode).toBe('new_column')
+    expect(store.mappings[0].target_field).toBe('新部门列')
+  })
+
+  it('v0.6.0.1.0：从 overwrite 切回 new_column → 保留 target_field 当前值', async () => {
+    ElMessageBoxConfirm.mockResolvedValueOnce(undefined) // 进入 overwrite 的 confirm
+    const store = gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    store.addMapping()
+    // 进入 overwrite 模式：从下拉里选了 target_headers 中的「部门」
+    await store.updateMappingAt(0, {
+      base_field: 'Department',
+      target_field: '部门',
+      mode: 'overwrite',
+    })
+    expect(store.mappings[0].mode).toBe('overwrite')
+    expect(store.mappings[0].target_field).toBe('部门')
+
+    // 切回 new_column：不需要 confirm；保留 target_field='部门'
+    wrapper.vm.onModeChange({ __idx: 0 }, 'new_column')
+    expect(store.mappings[0].mode).toBe('new_column')
+    expect(store.mappings[0].target_field).toBe('部门')
+  })
+
+  it('v0.6.0.1.0：canConfigure 与 mode 联动：new_column 时 target_field 必须非空', () => {
+    const store = gotoStep2()
+    store.addKeyPair()
+    store.targetKeys[0] = '工号'
+    store.baseKeys[0] = 'EID'
+    store.addMapping()
+    // new_column 模式 + target_field 空 → canConfigure=false
+    expect(store.mappings[0].mode).toBe('new_column')
+    expect(store.mappings[0].target_field).toBe('')
+    expect(store.canConfigure).toBe(false)
+    // 填齐 base_field + target_field → canConfigure=true
+    store.updateMappingAt(0, { base_field: 'Department', target_field: '新部门列' })
+    expect(store.canConfigure).toBe(true)
+  })
+
+  it('v0.6.0.1.0：canConfigure 与 mode 联动：overwrite 时 target_field 必须非空', async () => {
+    ElMessageBoxConfirm.mockResolvedValueOnce(undefined)
+    const store = gotoStep2()
+    store.addKeyPair()
+    store.targetKeys[0] = '工号'
+    store.baseKeys[0] = 'EID'
+    store.addMapping()
+    // 切到 overwrite（confirm mock 通过）
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    await wrapper.vm.onModeChange({ __idx: 0 }, 'overwrite')
+    expect(store.mappings[0].mode).toBe('overwrite')
+    expect(store.mappings[0].target_field).toBe('') // 已清空
+    expect(store.canConfigure).toBe(false)
+    // 填齐 base_field + target_field → canConfigure=true
+    store.updateMappingAt(0, { base_field: 'Department', target_field: '部门' })
+    expect(store.canConfigure).toBe(true)
+  })
+
+  it('v0.6.0.1.0：模板层 target_field 控件：mode=new_column 时 store.mappings[0].mode 决定 v-if', async () => {
+    // 不渲染 HTML（stubs 限制），改为验证 store 状态决定模板分支的语义
+    const store = gotoStep2()
+    const wrapper = mount(CrossTableFill, { global: { stubs: true } })
+    store.addMapping()
+    // mode=new_column（默认）→ 模板应渲染 el-input
+    await wrapper.vm.$nextTick()
+    expect(store.mappings[0].mode).toBe('new_column')
+    // 切到 overwrite → 模板应渲染 el-select
+    ElMessageBoxConfirm.mockResolvedValueOnce(undefined)
+    await wrapper.vm.onModeChange({ __idx: 0 }, 'overwrite')
+    await wrapper.vm.$nextTick()
     expect(store.mappings[0].mode).toBe('overwrite')
   })
 

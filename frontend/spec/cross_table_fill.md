@@ -144,34 +144,32 @@
         │   <el-divider />
         │
         │   <h3>映射规则（基础表 → 目标表）</h3>
-        │   <el-table :data="store.mappings" stripe size="small">
-        │     <el-table-column label="基础表字段" prop="base_field">
-        │       <template #default="{ row }">
-        │         <el-select v-model="row.base_field"
-        │                    :options="store.uploadResult.base_headers.map(h => ({value:h,label:h}))" />
-        │       </template>
-        │     </el-table-column>
-        │     <el-table-column label="目标列" prop="target_field">
-        │       <template #default="{ row }">
-        │         <el-select v-model="row.target_field"
-        │                    :options="store.uploadResult.target_headers.map(h => ({value:h,label:h}))" />
-        │       </template>
-        │     </el-table-column>
-        │     <el-table-column label="模式" prop="mode" width="180">
-        │       <template #default="{ row }">
-        │         <el-radio-group v-model="row.mode">
-        │           <el-radio-button value="new_column">新增列</el-radio-button>
-        │           <el-radio-button value="overwrite">覆盖原列</el-radio-button>
-        │         </el-radio-group>
-        │       </template>
-        │     </el-table-column>
-        │     <el-table-column label="操作" width="100">
-        │       <template #default="{ $index }">
-        │         <el-button size="small" type="danger" :icon="Delete"
-        │                    @click="removeMapping($index)">删除</el-button>
-        │       </template>
-        │     </el-table-column>
-        │   </el-table>
+        │   <!-- v0.6.0.1.0：每行 .mapping-row 卡片；目标列控件随 mode 变化 -->
+        │   <div v-for="(m, idx) in store.mappings" :key="`m-${idx}`" class="mapping-row">
+        │     <span class="mapping-label">基础表字段</span>
+        │     <el-select v-model="m.base_field"
+        │                :options="store.uploadResult.base_headers.map(h => ({value:h,label:h}))"
+        │                placeholder="选择基础表字段" filterable class="mapping-select" />
+        │     <span class="mapping-arrow">→</span>
+        │     <span class="mapping-label">目标列</span>
+        │     <!-- mode=new_column：自由输入新列名 -->
+        │     <el-input v-if="m.mode === 'new_column'"
+        │               v-model="m.target_field"
+        │               placeholder="输入新列名"
+        │               class="mapping-select" />
+        │     <!-- mode=overwrite：下拉选已有列 -->
+        │     <el-select v-else
+        │                v-model="m.target_field"
+        │                :options="store.uploadResult.target_headers.map(h => ({value:h,label:h}))"
+        │                placeholder="选择目标列" filterable class="mapping-select" />
+        │     <span class="mapping-label">模式</span>
+        │     <el-radio-group v-model="m.mode">
+        │       <el-radio-button value="new_column">新增列</el-radio-button>
+        │       <el-radio-button value="overwrite">覆盖原列</el-radio-button>
+        │     </el-radio-group>
+        │     <el-button size="small" type="danger" :icon="Delete"
+        │                @click="removeMapping(idx)">删除</el-button>
+        │   </div>
         │   <el-button :icon="Plus" @click="addMapping">新增映射</el-button>
         │
         │   <el-divider />
@@ -338,15 +336,19 @@
 
 #### 交互逻辑
 - 用户分别点击两张「选择文件」按钮 → 触发 `el-upload` 单文件选择器（MIME 限制 `accept=".xlsx"`）；
-- 用户选中文件后，`onChange` 触发 `store.setTargetFile(file)` 或 `store.setBaseFile(file)`：
+- 用户选中文件后，`onChange` 触发，**入参是 Element Plus 的 wrapper 对象** `{ name, size, uid, status, percentage, raw: File, ... }`（**不是浏览器原生 `File`**）。视图层必须先**解出 `raw`**，再交给 store，否则后续 `form.append('target_file', wrapper)` 时浏览器会把 wrapper 经 `String()` 序列化为字符串（例如 `"[object Object]"`）作为 form 字段提交，后端 multipart 解析会把 `target_file` 当字符串，最终 Pydantic 抛 `Value error, Expected UploadFile, received: <class 'str'>` → 422。
+- 解 wrapper 后调 `store.setTargetFile(rawFile)` / `store.setBaseFile(rawFile)`：
 
 | 阶段 | 内容 |
 |------|------|
-| 文件大小校验 | 后端 20 MB；前端可在 `onChange` 入口做早期检查 → 超 20 MB → `ElMessage.warning('文件超过 20 MB 上限')` 并清空 |
-| 后缀校验 | 前端检查 `.xlsx` → 非 `.xlsx` → `ElMessage.error('仅支持 .xlsx 文件')` 并清空（前端短路，后端也会兜底 422） |
-| 写入 store | `targetFile = file` / `baseFile = file`；文件名 chip 显示在按钮右侧（`{{ file.name }}`） |
+| **wrapper 解包（v0.6.0 关键修复）** | `const rawFile = file.raw instanceof File ? file.raw : file`；若最终仍非 `File`（降级路径）→ `ElMessage.error('文件类型有误，请重新选择')` 并清空 |
+| **.xlsx 后缀校验** | 读取 `rawFile.name` → 非 `.xlsx` → `ElMessage.error('仅支持 .xlsx 文件')` 并清空（前端短路，后端也会兜底 422） |
+| **20 MB 上限** | 读取 `rawFile.size` → 超 20 MB → `ElMessage.warning('文件超过 20 MB 上限')` 并清空 |
+| 写入 store | `targetFile = rawFile` / `baseFile = rawFile`；chip 显示文件名（取自 `rawFile.name`） |
 | 替换文件 | 若已选过，点击新文件 → 直接覆盖旧 file；不需要「先移除再选择」|
 | 「开始解析」按钮 enable | 两文件都选齐 + 未上传时 → `canUpload === true` |
+
+> **降级兼容**：当调用方传**裸 `File`** 而非 wrapper 时（理论上 el-upload 不会这样，但容错成本极低）—— 代码逻辑 `file.raw instanceof File ? file.raw : file` 自动回退使用 `file` 本身。无需调用方做适配。
 
 #### 文件未选时的显示
 - 「目标表 xlsx」按钮 label = `选择文件`；右侧无 chip；
@@ -370,12 +372,19 @@
 
 ### 2.4 功能点：配置主键（Step 2）
 
-#### 主键对 UI（key-pair-row）
-- 默认初始为空数组 `[]`；用户首次进入 Step 2 看到「请添加至少一对主键」；
-- 点「新增一对」→ 追加一对 `{ targetKey: null, baseKey: null }`；
-- 任意一行可点「移除」→ 移除该对（最后一行不可移除，至少保留 1 对）；
+#### 主键对 UI（key-pair-row，v0.6.0.0.3 hot fix）
+
+- **空态（v0.6.0.0.3 修复）**：`store.targetKeys = []` 时：
+  - 标题「主键字段」下方展示 `.empty-hint` 灰色提示条：「暂无主键对；点下方「新增一对」添加。」
+  - **「新增一对」按钮位于 v-for 之外、section 末尾；任何时候都可见，是添加第一对的入口。**
+  - `v-for` 因为数组为空渲染 0 个 `.key-pair-row`，无「移除」按钮。
+- **加了一对但未填齐字段**：v-for 渲染 1 个 `.key-pair-row`（含两个 `el-select` 占位 + 这一对内部「移除」按钮）；外层「新增一对」按钮已可见可点。
+- **加了一对且 target+base 都非空**：这一对的内部「移除」按钮显示，**这一对的内部「新增一对」按钮隐藏**（避免一行两个相同按钮）；外层「新增一对」按钮可见可点，方便继续追加。
+- **加到 ≥2 对且都填齐**：前 N-1 行只显示「移除」；最末行显示「移除」+ 内部隐藏的「新增一对」（外层仍可见）；保证新加一对时不会出现「添加第二遍重复的」按钮。
 - 每对包含两个 `el-select`：左 target 字段下拉，右 base 字段下拉；中间显示 `⟷`；
 - 选择器选项来自 `store.uploadResult.target_headers` 与 `store.uploadResult.base_headers`（字符串列表）。
+
+> **v0.6.0.0.3 修复前 bug**：v0.6.0 初版的「新增一对」按钮写在 `v-for` 内部、且 `v-if="idx === store.targetKeys.length - 1"`，导致 `targetKeys = []` 时整个 `v-for` 不渲染、按钮**永远不可点**；用户进入 Step 2 后无法添加第一对主键、`canConfigure` 永远 false、「下一步」永远 disabled。修复方案是把按钮移到 `v-for` 之外 + 空态提示；行为细节见上表。
 
 #### 主键校验
 - `canConfigure` getter 内必须 `store.targetKeys.length >= 1`；
@@ -384,20 +393,38 @@
 
 ### 2.5 功能点：配置映射（Step 2）
 
-#### 映射表 UI（el-table）
+> **v0.6.0.1.0 行为变更**：映射行的「目标列」控件根据 `mode` 不同而变化：
+> - `mode='new_column'`：渲染为**输入框**（`el-input`），用户**自由输入**新列名（不允许为空）；
+> - `mode='overwrite'`：渲染为**下拉框**（`el-select`），选项 = `store.uploadResult.target_headers`，用户从现有列中选择；
+>
+> 这一变更的语义：覆盖原列是对已有列做操作，必须指向具体列；新增列是新增能力，列名由用户指定。后端 PATCH 时统一把「输入值」/「下拉值」都作为 `target_field` 字段提交。
+
+#### 映射行 UI（v0.6.0.1.0 调整）
+
+- **空态**：`store.mappings = []` 时：
+  - 标题「映射规则」下方展示 `.empty-hint` 提示条：「暂无映射行；点下方「新增映射」添加。」
+  - 「新增映射」按钮位于 v-for 之外、section 末尾；任何时候都可见。
+- **加了 ≥1 行**：每行含「基础表字段下拉 + 目标列控件（mode=新列→输入框；mode=覆盖→下拉框）+ 模式单选 + 删除按钮」；行内字段未填时不影响 UI（仅影响 canConfigure）。
 - `store.mappings` 是 `list[{base_field, target_field, mode}]`；
-- 默认 1 行：「基础表字段下拉 + 目标列下拉 + 单选按钮组（new_column / overwrite）+ 删除按钮」；
-- 点「新增映射」→ 追加一行（同表 1 列）；
+- 点「新增映射」→ 追加一行 `{ base_field: '', target_field: '', mode: 'new_column' }`（`target_field` 为新增列时由用户自由输入）；
 - 「删除」→ 从数组移除该行（最后一行可删，因 mappings 至少 1 条由 PATCH 时校验）。
+- 行内删除按钮：每行固定显示。
+
+#### 目标列控件细节（v0.6.0.1.0）
+
+| mode | 控件 | 选项/约束 |
+|------|------|---------|
+| `new_column` | `el-input` | 自由文本；不可为空；后端对与 target 已有列同名情况自动加 `_filled` 后缀；同表内不同 mapping 的 `target_field` 互不冲突即可（后端处理冲突） |
+| `overwrite` | `el-select` | 选项 = `store.uploadResult.target_headers`；不可为空；不能选「下拉里没有的列」（语义上不能覆盖不存在的列） |
 
 #### mode 切换 UX
 - 默认 `new_column`（安全默认）；
 - 用户切到 `overwrite` → 立即 `ElMessageBox.confirm`「覆盖模式将覆盖目标表的同名列，确认切换？」，用户选「确定」→ 状态切换、写入 store；选「取消」→ 单选按钮回退 `new_column`；
+- 用户从 `overwrite` 切回 `new_column` → 直接切换，无需确认；但若原 `target_field` 不为空、且不在 `target_headers` 中（即原「覆盖」选择的具体列），切换时**保留**该值（不强制清空），让用户继续编辑；如需清空可手动删除文本；
 - 整体 PATCH 时若 `has_overwrite === true` 但 `confirm_token` 为 null → 走 §2.7 二跳确认。
 
-#### 表 / target 列下拉
-- 选项均为上传时返回的 headers 列表；
-- `target_field` 与现有 target 已有列同名时，下拉选项正常包含该名（这是允许的，因为后端会自动加 `_filled` 后缀；warnings 提示用户）。
+#### 表（base_field）下拉
+- 选项均为上传时返回的 `store.uploadResult.base_headers` 列表。
 
 ### 2.6 功能点：高级选项（Step 2）
 
@@ -615,11 +642,15 @@ goToStep 仅支持：
 
 ### 4.1 `api/cross_table_fill.js` 新建
 
+> **v0.6.0 multipart 上传约定**：依 [./README.md §3.6](./README.md#36-formdata-上传规则v060-新增) 全局规则，`uploadCrossTable` **不得**显式设 `headers['Content-Type']`，让 axios 自动追加 `boundary=...`。`api/client.js` 的 request interceptor 已对老代码兜底（`delete headers['Content-Type']`），但新写代码应保持「裸调 `client.post(url, form)`」风格。
+
 ```js
 import client from './client.js'
 
 /**
  * 上传两张表（multipart）。
+ * 注意：不要在 headers 里写 Content-Type — axios 会自动加 boundary=...
+ * 详见 README §3.6。
  *
  * @param {{ target: File, base: File, expires_in_hours?: number }} input
  * @returns {Promise<CrossTableFillUploadResponse>}
@@ -628,12 +659,11 @@ export function uploadCrossTable({ target, base, expires_in_hours }) {
   const form = new FormData()
   form.append('target_file', target)
   form.append('base_file', base)
-  if (expires_in_hours !== undefined) {
+  if (expires_in_hours !== undefined && expires_in_hours !== null) {
     form.append('expires_in_hours', String(expires_in_hours))
   }
   return client.post('/cross-table-fill/jobs', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000
+    timeout: 60000,
   })
 }
 
@@ -751,12 +781,23 @@ function removeKeyPair(idx) { /* store.targetKeys.splice / baseKeys.splice */ }
 function addMapping() { store.mappings.push({ base_field: '', target_field: '', mode: 'new_column' }) }
 function removeMapping(idx) { store.mappings.splice(idx, 1) }
 function onModeChange(row, val) {
+  // v0.6.0.1.0：从 new_column 切到 overwrite 时清空 target_field（让用户从下拉中重选）；
+  //              从 overwrite 切回 new_column 时保留 target_field（用户可继续编辑）。
   if (val === 'overwrite') {
+    // 先清空目标列，触发 ElMessageBox.confirm；用户取消则 row.mode 写回 new_column。
+    const prevMode = row.mode
+    const prevTarget = row.target_field
+    row.target_field = ''
     ElMessageBox.confirm('覆盖模式将覆盖目标表的同名列，确认切换？', '提示', {
       type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消'
     }).catch(() => {
-      row.mode = 'new_column'
+      // 取消 → 切回原 mode + 还原 target_field
+      row.mode = prevMode
+      row.target_field = prevTarget
     })
+  } else if (val === 'new_column') {
+    // 切回 new_column：保留 target_field 当前值（若是空则让用户继续输入）
+    // 不需要二次确认
   }
 }
 </script>
@@ -985,12 +1026,28 @@ async function onConfigure() {
 - 点「开始解析」：`store.upload()` 被调用；按钮 loading；成功后 step 切到 `uploaded`，stepIndex=1
 - 后端 413 响应：toast「文件超过 20 MB」；步骤保留
 - 后端 422 响应（如重复 headers）：toast detail；步骤保留
+- **el-upload wrapper 解包（v0.6.0）**：
+  - `onTargetFileChange({ name, size, uid, raw: File })` 模拟 wrapper 形态 → `store.targetFile` 写入 `raw`（裸 File） → `form.append('target_file', raw)` 提交时是真 File 字段
+  - 直接传 `File(...)`（非 wrapper）→ 降级用 `File` 本身，行为一致
+  - 传 `null` → `setter` 不被调用；不报错
+  - wrapper 但 `raw` 不是 `File`（极端） → `ElMessage.error('文件类型有误，请重新选择')`；`setter` 不被调用
+  - 文件后缀非 `.xlsx` → `ElMessage.error('仅支持 .xlsx 文件')`，`setter` 不被调用
+  - 文件 > 20 MB → `ElMessage.warning('文件超过 20 MB 上限')`，`setter` 不被调用
 
 #### 9.3.2 Step 2：配置
-- 初始：所有 `targetKeys` / `baseKeys` / `mappings` 空
-- 点「新增一对」：key-pair-row +1
+- 初始：所有 `targetKeys` / `baseKeys` / `mappings` 空；空态提示文案渲染，「新增一对」与「新增映射」按钮均在 DOM
+- **空态可达性（v0.6.0.0.3 新增）**：
+  - 在 Step 2 mount 后调用 `wrapper.vm.addKeyPair()` → `store.targetKeys.length === 1`，空态提示消失
+  - 在 Step 2 mount 后调用 `wrapper.vm.addMapping()` → `store.mappings.length === 1`，空态提示消失
+- 点「新增一对」：key-pair-row +1；同时外层「新增一对」按钮**仍在 DOM**（不再依赖 v-for 索引）
 - 点「移除」：key-pair-row -1（最后一行不可移除）
-- 点「新增映射」：mappings +1（默认 new_column）
+- 主键对字段校验显示：每对 `targetKey` 与 `baseKey` 任一为空 → 红色错误条渲染「每对主键都必须填齐 target 与 base」
+- 点「新增映射」：mappings +1（默认 new_column）；外层按钮**仍在 DOM**
+- **目标列控件随 mode 变化（v0.6.0.1.0）**：
+  - mode='new_column' → 渲染 `el-input`；用户输入新列名；为空时 `canConfigure=false`
+  - mode='overwrite' → 渲染 `el-select`；选项 = `store.uploadResult.target_headers`；未选时 `canConfigure=false`
+  - 用户从 `new_column` 切到 `overwrite` → `target_field` 保留原文本（不在 `target_headers` 中时强制清空；实际上从 input 文本切换到 select 控件后用户必须重新选择）
+  - 用户从 `overwrite` 切回 `new_column` → `target_field` 保留原值；用户在 input 中可继续编辑
 - 选 mode='overwrite'：触发 `ElMessageBox.confirm`；用户选取消 → row.mode 回退 new_column；用户选确定 → row.mode 写 overwrite
 - 含 overwrite + 点「下一步」：触发 `ElMessageBox.confirm`「覆盖确认」；用户选取消 → 不发请求；用户选确定 → crypto.randomUUID() 生成 token + PATCH
 - PATCH 成功：step 切到 `configured`，stepIndex=2
@@ -1045,3 +1102,54 @@ async function onConfigure() {
 - `overwrite` 强制前端 `ElMessageBox.confirm` 二次确认 + `crypto.randomUUID()` 生成 `confirm_token`；
 - Step 4 渲染 `merge_multi_count` 的橙色 tag；
 - 测试计划 9.3 覆盖 18 个 UI 交互用例。
+
+### v0.6.0.1（修复 el-upload wrapper 透传）
+
+**修复前的 bug**：`CrossTableFill.vue::buildFileValidator` 直接把 el-upload @change 传入的 wrapper 对象 `{ name, size, raw: File, ... }` 整体塞给 `store.setTargetFile(file)`，再由 `uploadCrossTable` 里 `form.append('target_file', file)` 提交。浏览器 FormData 接到非 File/Blob/字符串的对象时，会调 `String(wrapper)` 序列化为 `"[object Object]"` 当作普通 form field 上传。后端 multipart 解析器读 `target_file` 得到字符串，最终 Pydantic 抛 `Value error, Expected UploadFile, received: <class 'str'>` → 422。
+
+**修复**：在 `buildFileValidator` 内解 wrapper：`const rawFile = file.raw instanceof File ? file.raw : file`；并对最终值做 `instanceof File` 守卫（不通过则 toast「文件类型有误，请重新选择」且不写入 store）。
+
+**配套修改**：
+- `frontend/src/views/CrossTableFill.vue::buildFileValidator` 函数体重构；
+- `frontend/src/views/__tests__/CrossTableFill.test.js` 新增 6 条 wrapper 解包用例；
+- spec §2.2、§9.3.1 同步更新（解释 wrapper/raw 语义，新增 6 条测试 case）；
+- 与上一轮 `client.js` 的 `formDataRequestInterceptor` 修复**互补**：本次修「值是乱字符串」，上一轮修「缺 boundary」。两者任一缺一都会触发 422。
+
+### v0.6.0.0.3（hot fix：Step 2 「下一步」可点击性）
+
+**修复前的 bug**：进入 Step 2（首次配置阶段）后，「下一步」按钮**永远处于 disabled**，用户无法继续：
+- 「新增一对」按钮写在 `v-for` 内部且带 `v-if="idx === store.targetKeys.length - 1"`；
+- 初始 `store.targetKeys = []` ⇒ `v-for` 渲染 0 次 ⇒ 「新增一对」按钮**不在 DOM 中**；
+- 用户没有入口添加第一对主键 ⇒ `store.targetKeys.length === 0` ⇒ `canConfigure` getter 永远 `false` ⇒ 「下一步」按钮 `:disabled="!canConfigure"` 永远 true；
+- 同样症状影响 mappings 区：用户可点「新增映射」（按钮在 v-for 外），但加一行后无任何视觉提示「需要选基础表字段 + 目标列」，用户加了一行空 mapping 后「下一步」仍 disabled，且无错误文案解释原因。
+
+**修复**：
+- 主键对：「新增一对」按钮**移出 v-for** 到 section 末尾独立 `.row-actions` 容器；任何时候都可见（包括空态）；当加了一对但 targetKey/baseKey 还未填齐时，这一对的**内部**「新增一对」按钮隐藏（行内重复避免）；外层按钮永远显示。
+- mappings 区：加 `.empty-hint` 提示「暂无映射行；点下方「新增映射」添加。」，与主键对风格一致。
+- 新增 CSS `.empty-hint`（灰底浅框）。
+
+**配套修改**：
+- `frontend/src/views/CrossTableFill.vue::template` 重写（v-for 外的「新增一对」+ 空态提示 + mappings 空态）；
+- `frontend/src/views/CrossTableFill.vue::<style scoped>` 新增 `.empty-hint` 样式；
+- `frontend/src/views/__tests__/CrossTableFill.test.js` 新增 4 条用例（空态提示渲染 / 外层「新增一对」不在 v-for 内 / mappings 空态 / 加一对后外层按钮依然在 DOM）；
+- spec §2.4 / §2.5 / §9.3.2 同步更新（明确「按钮定位 + 空态文案」契约）。
+
+**无需后端 / API 改动**：纯前端 UX bug。
+
+### v0.6.0.1.0（行为变更：目标列控件随 mode 切换）
+
+**变更前**：映射行的「目标列」控件**始终**是 `el-select`，选项 = `store.uploadResult.target_headers`。`mode='new_column'` 时用户仍从已有列中选择一个名字作为新列名（语义混淆：新增列的列名却只能是 target 已有列）。
+
+**变更后**：
+- `mode='new_column'`：目标列控件渲染为 `el-input`，用户**自由输入**新列名；后端对与 target 已有列同名情况自动加 `_filled` 后缀（沿用既有逻辑）；
+- `mode='overwrite'`：目标列控件渲染为 `el-select`，选项 = `store.uploadResult.target_headers`，用户选择要覆盖的具体列。
+
+**动机**：让 UI 语义与 mode 严格匹配 ——「新增列」是新增能力、列名由用户决定；「覆盖原列」是对既有列的操作、必须指向具体列。两种语义不再共用一个下拉。
+
+**配套修改**：
+- `frontend/src/views/CrossTableFill.vue` mapping 行模板：目标列控件根据 `m.mode` 用 `v-if` 切换 `el-input` / `el-select`；
+- `frontend/src/views/CrossTableFill.vue` `onModeChange`：从 overwrite 切回 new_column 时保留 `target_field` 值；从 new_column 切到 overwrite 时清空 `target_field`（让用户从下拉中重新选择，因为 input 中的文本可能不在 headers 里）；
+- `frontend/src/views/__tests__/CrossTableFill.test.js` 新增 4 条用例（mode='new_column' 时渲染 input；mode='overwrite' 时渲染 select；切换 mode 时 target_field 行为正确；canConfigure 与 mode 联动）；
+- spec §1.3 / §2.5 / §9.3.2 同步更新（明确控件切换契约）。
+
+**后端无改动**：mappings 的 `target_field` 字段始终是字符串，新列模式下用户输入的字符串即作为新列名提交；后端按既有逻辑处理与 target 已有列冲突的情况（自动 `_filled` 后缀）。

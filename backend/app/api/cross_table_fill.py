@@ -245,18 +245,29 @@ def _validate_config(
             status_code=422,
             detail="target_keys and base_keys must have equal length",
         )
-    # mappings 字段校验
+    # mappings 字段校验（v0.6.0.1.0：按 mode 分支校验 target_field）
     for m in payload.mappings:
         if m.base_field not in base_set:
             raise HTTPException(
                 status_code=422,
                 detail=f"mappings.base_field '{m.base_field}' not in base_headers",
             )
-        if m.target_field not in target_set:
-            raise HTTPException(
-                status_code=422,
-                detail=f"mappings.target_field '{m.target_field}' not in target_headers",
-            )
+        if m.mode == "overwrite":
+            # overwrite 模式：target_field 必须严格指向 target 已有列
+            if m.target_field not in target_set:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"mappings.target_field '{m.target_field}' not in target_headers (mode='overwrite' requires existing column)",
+                )
+        else:
+            # new_column 模式：target_field 是用户自由输入的新列名，不要求在 target_headers 中；
+            # 与 target_headers 同名的情况由 execute 阶段加 _filled 后缀处理（warnings 提示用户）。
+            # 此处仅校验非空。
+            if not m.target_field or not str(m.target_field).strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="mappings.target_field must be a non-empty string (mode='new_column')",
+                )
 
     # warnings：target 表空键值行（此处不展开整表，仅基于已知 rows 估算）
     # 由于 warnings 在路由层生成，需 query DB → 留给调用方

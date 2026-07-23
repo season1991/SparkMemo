@@ -299,15 +299,56 @@ async def test_config_422_mapping_base_unknown(client):
     assert r.status_code == 422, r.text
 
 
-async def test_config_422_mapping_target_unknown(client):
-    """TC13：mapping.target_field 不在 target_headers → 422"""
+async def test_config_422_mapping_target_unknown_overwrite(client):
+    """TC13（v0.6.0.1.0）：mapping.target_field 不在 target_headers 且 mode='overwrite' → 422"""
     job_id = await _upload_and_get_job_id(client)
     r = await _patch_config(
         client, job_id,
         target_keys=["工号"], base_keys=["EID"],
-        mappings=[{"base_field": "Department", "target_field": "不存在", "mode": "new_column"}],
+        mappings=[{"base_field": "Department", "target_field": "不存在", "mode": "overwrite"}],
+        confirm_token=str(uuid.uuid4()),
     )
     assert r.status_code == 422, r.text
+    assert "not in target_headers" in r.text
+    assert "overwrite" in r.text
+
+
+async def test_config_200_new_column_target_not_in_headers(client):
+    """TC13-new（v0.6.0.1.0）：mapping.mode='new_column' + target_field 不在 target_headers → 200
+    （自由输入新列名是合法行为；与现有列同名由 execute 阶段加 _filled 后缀）"""
+    job_id = await _upload_and_get_job_id(client)
+    r = await _patch_config(
+        client, job_id,
+        target_keys=["工号"], base_keys=["EID"],
+        mappings=[{"base_field": "Department", "target_field": "新部门列", "mode": "new_column"}],
+    )
+    assert r.status_code == 200, r.text
+
+
+async def test_config_200_new_column_target_collision_with_existing(client):
+    """TC13-new2（v0.6.0.1.0）：mapping.mode='new_column' + target_field 与 target_headers 同名 → 200
+    （应返回 warnings 提示「将自动加 _filled 后缀」）"""
+    job_id = await _upload_and_get_job_id(client)
+    r = await _patch_config(
+        client, job_id,
+        target_keys=["工号"], base_keys=["EID"],
+        mappings=[{"base_field": "Department", "target_field": "部门", "mode": "new_column"}],
+    )
+    assert r.status_code == 200, r.text
+    warnings = r.json()["warnings"]
+    assert any("部门" in w and "_filled" in w for w in warnings), f"expected warning about 部门 _filled suffix; got {warnings}"
+
+
+async def test_config_422_new_column_target_empty(client):
+    """TC13-new3（v0.6.0.1.0）：mapping.mode='new_column' + target_field 为空字符串 → 422"""
+    job_id = await _upload_and_get_job_id(client)
+    r = await _patch_config(
+        client, job_id,
+        target_keys=["工号"], base_keys=["EID"],
+        mappings=[{"base_field": "Department", "target_field": "", "mode": "new_column"}],
+    )
+    assert r.status_code == 422, r.text
+    assert "non-empty" in r.text or "must be" in r.text
 
 
 async def test_config_422_bad_mode(client):

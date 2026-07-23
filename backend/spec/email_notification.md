@@ -86,6 +86,8 @@ updated_at      Mapped[str]        # YYYY-MM-DD，10 字符
 #### 幂等 ALTER TABLE（已存在库升级）
 
 > 仓库**未引入 Alembic**；首次启动依赖 `Base.metadata.create_all()`。新列在空库 / 测试 SQLite 场景自动出现，但**已有 MySQL 实例不会自动加列**。
+>
+> **v0.6.0 修订**：项目级硬约束已升格，详见 [`./README.md` §4](./README.md)。所有新表走手工 SQL，DDL 集中于 `backend/sql/dev_sql.sql`（单一文件）。本节保留 ALTER COLUMN 的 ALTER 语句参考，但**新表不再依赖 ORM 自动创建**。
 
 **采用方案**：`app/main.py` lifespan 启动时、scheduler.start() **之前**执行幂等 `ALTER TABLE`：
 

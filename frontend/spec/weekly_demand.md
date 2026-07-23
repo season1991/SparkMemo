@@ -829,7 +829,7 @@ function getCellClass(row, periodDate) {
 
 | 用例 | 期望 |
 |------|------|
-| `uploadDspFile(file, meta)` | 走 POST /dsp-uploads；FormData keys 含 file/vendor/item/sub_item/version_date；Content-Type multipart/form-data；timeout ≥ 10s |
+| `uploadDspFile(file, meta)` | 走 POST /dsp-uploads；FormData keys 含 file/vendor/item/sub_item/version_date；**不**手动设 Content-Type（依赖 `client.js` request interceptor + axios 自动加 boundary；详见 [README §3.6](./README.md#36-formdata-上传规则v060-新增)）；timeout ≥ 10s（设 60000） |
 | `listDspUploads` | GET 带 page/size params |
 | `getDspUpload` | GET /dsp-uploads/{id} |
 | `listDspUploadRows` | GET /dsp-uploads/{id}/rows |

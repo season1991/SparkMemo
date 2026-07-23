@@ -23,6 +23,7 @@ import {
 import { useCrossTableFillStore } from '../stores/useCrossTableFillStore.js'
 import { showApiError } from '../api/client.js'
 import { downloadBlob } from '../utils/downloadBlob.js'
+import { unwrapElUploadFile } from '../utils/fileValidator.js'
 
 const MAX_BYTES = 20 * 1024 * 1024
 
@@ -40,18 +41,39 @@ const {
 
 // ---------------- file helpers ----------------
 
+/**
+ * 构造 el-upload @change 回调。
+ *
+ * v0.6.0.1 关键修复：el-upload @change 入参是 Element Plus 的 wrapper
+ * `{ name, size, uid, status, percentage, raw: File, ... }`，**不是浏览器原生
+ * `File`**。若直接把 wrapper 透传给 store，后续 `form.append('target_file',
+ * wrapper)` 会被浏览器 `String()` 序列化为 `"[object Object]"`，最终后端
+ * Pydantic 抛「Expected UploadFile, received: <class 'str'>」→ 422。
+ *
+ * 修复路径：先经 `unwrapElUploadFile(...)` 解出真 File，再做后缀 / 大小校验。
+ *
+ * 详见 spec §2.2 / §11 v0.6.0.1 与 `utils/fileValidator.js`。
+ *
+ * @param {(rawFile: File) => void} setter 把真 File 写入 store
+ * @returns {(file: any) => boolean} 给 el-upload @change 用；返回 false 阻止默认上传
+ */
 function buildFileValidator(setter) {
   return (file) => {
     if (!file) return false
-    if (file.name && !file.name.toLowerCase().endsWith('.xlsx')) {
+    const rawFile = unwrapElUploadFile(file)
+    if (!rawFile) {
+      ElMessage.error('文件类型有误，请重新选择')
+      return false
+    }
+    if (!rawFile.name.toLowerCase().endsWith('.xlsx')) {
       ElMessage.error('仅支持 .xlsx 文件')
       return false
     }
-    if (file.size > MAX_BYTES) {
+    if (rawFile.size > MAX_BYTES) {
       ElMessage.warning('文件超过 20 MB 上限')
       return false
     }
-    setter(file)
+    setter(rawFile)
     return false // 阻止 el-upload 默认上传
   }
 }
@@ -111,18 +133,24 @@ function onMappingFieldChange(idx, key, value) {
 function onModeChange(row, val) {
   const idx = row.__idx
   if (val === 'overwrite') {
-    ElMessageBox.confirm(
+    // v0.6.0.1.0：先清空 target_field，再弹确认；用户取消 → 还原 mode + target_field
+    // 从 store 读取 prev 值（row 是 wrapper 对象，不一定有 mode/target_field 字段）
+    const prevMode = store.mappings[idx]?.mode
+    const prevTarget = store.mappings[idx]?.target_field
+    store.updateMappingAt(idx, { target_field: '' })
+    return ElMessageBox.confirm(
       '覆盖模式将覆盖目标表的同名列，确认切换？',
       '提示',
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
     )
       .then(() => store.updateMappingAt(idx, { mode: 'overwrite' }))
       .catch(() => {
-        store.updateMappingAt(idx, { mode: 'new_column' })
+        // 取消：还原原 mode 与 target_field
+        store.updateMappingAt(idx, { mode: prevMode, target_field: prevTarget })
       })
-  } else {
-    store.updateMappingAt(idx, { mode: 'new_column' })
   }
+  // 切回 new_column：保留 target_field 当前值（用户可继续编辑）；不需要确认
+  store.updateMappingAt(idx, { mode: 'new_column' })
 }
 
 const targetHeaders = computed(() => store.uploadResult?.target_headers || [])
@@ -368,6 +396,12 @@ const keyPairsDisplay = computed(() => {
 
       <h3>主键字段</h3>
       <p class="form-hint">target_keys 与 base_keys 按位置一一对应</p>
+
+      <!-- v0.6.0.0.3 hot fix：空态提示 + 「新增一对」按钮外移，避免空态无入口 -->
+      <p v-if="store.targetKeys.length === 0" class="empty-hint">
+        暂无主键对；点下方「新增一对」添加。
+      </p>
+
       <div
         v-for="(tk, idx) in store.targetKeys"
         :key="`kp-${idx}`"
@@ -389,7 +423,7 @@ const keyPairsDisplay = computed(() => {
           @update:model-value="(v) => (store.baseKeys[idx] = v)"
         />
         <el-button
-          v-if="idx === store.targetKeys.length - 1"
+          v-if="idx === store.targetKeys.length - 1 && store.targetKeys[idx] && store.baseKeys[idx]"
           size="small"
           :icon="Plus"
           @click="addKeyPair"
@@ -403,9 +437,20 @@ const keyPairsDisplay = computed(() => {
       </div>
       <p v-if="keysValidationError" class="field-error">{{ keysValidationError }}</p>
 
+      <!-- 「新增一对」按钮移出 v-for：永远可见，是空态下加第一对的入口 -->
+      <div class="row-actions">
+        <el-button :icon="Plus" @click="addKeyPair">新增一对</el-button>
+      </div>
+
       <el-divider />
 
       <h3>映射规则（基础表 → 目标表）</h3>
+
+      <!-- v0.6.0.0.3：映射区空态提示，与主键对风格一致 -->
+      <p v-if="store.mappings.length === 0" class="empty-hint">
+        暂无映射行；点下方「新增映射」添加。
+      </p>
+
       <div
         v-for="(m, idx) in store.mappings"
         :key="`m-${idx}`"
@@ -422,7 +467,16 @@ const keyPairsDisplay = computed(() => {
         />
         <span class="mapping-arrow">→</span>
         <span class="mapping-label">目标列</span>
+        <!-- v0.6.0.1.0：mode=new_column 时自由输入新列名；mode=overwrite 时下拉选已有列 -->
+        <el-input
+          v-if="m.mode === 'new_column'"
+          :model-value="m.target_field"
+          placeholder="输入新列名"
+          class="mapping-select"
+          @update:model-value="(v) => onMappingFieldChange(idx, 'target_field', v)"
+        />
         <el-select
+          v-else
           :model-value="m.target_field"
           :options="targetHeaderOptions()"
           placeholder="选择目标列"
@@ -654,6 +708,22 @@ const keyPairsDisplay = computed(() => {
   color: #909399;
   font-size: 12px;
   margin-left: 8px;
+}
+/* v0.6.0.0.3 hot fix：空态提示 / 行动按钮容器 */
+.empty-hint {
+  color: #909399;
+  background: #f5f7fa;
+  border: 1px dashed #dcdfe6;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin: 4px 0 12px;
+  font-size: 13px;
+  display: block;
+}
+.row-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin: 8px 0 4px;
 }
 .meta-info {
   color: #909399;

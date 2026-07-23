@@ -28,7 +28,6 @@ export function uploadCrossTable({ target, base, expires_in_hours }) {
     form.append('expires_in_hours', String(expires_in_hours))
   }
   return client.post('/cross-table-fill/jobs', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 60000,
   })
 }

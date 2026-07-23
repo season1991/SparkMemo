@@ -13,6 +13,7 @@
 - [x] **Phase 3** 后端实现（绿） —— 49/49 通过；既有 304 条测试无回归（合计 353/353）
 - [x] **Phase 4** 生成 OpenAPI（`backend/openapi/cross_table_fill.json`，含 7 端点 + 12 schemas）
 - [x] **Phase 6** 收尾（更新 Todo / 清理闲 import / 复核 spec 一致性）
+- [x] **Phase 7** hot fix v0.6.0.0.2（缺表 500 → 手工建表）—— 项目级硬约束升格：`backend/sql/dev_sql.sql` 单一汇总点；`spec/README.md` §4 落地；同步修订 `cross_table_fill.md` §Assumption 2 + `email_notification.md`。app 代码无改动。
 
 ---
 
@@ -142,6 +143,22 @@
 
 ### 3.7 收尾
 
-- [ ] **3.7.1** 所有 docstring 中文 + 章节注释
-- [ ] **3.7.2** `backend/spec/README.md` 模块表保留 v0.6.0 待开发 → 改为已发布
-- [ ] **3.7.3** spec 文档自我审计一遍（如有偏差同步更新）
+- [x] **3.7.1** 所有 docstring 中文 + 章节注释
+- [x] **3.7.2** `backend/spec/README.md` 模块表保留 v0.6.0 待开发 → 改为已发布
+- [x] **3.7.3** spec 文档自我审计一遍（如有偏差同步更新）
+
+---
+
+## Phase 7 — hot fix：缺表 500 → 手工建表
+
+**问题（v0.6.0.0.2）**：用户首次部署到生产 MySQL `sparkmemo` 时，POST /jobs 上传两步走通后，INSERT 阶段报 `Table 'sparkmemo.cross_table_fill_jobs' doesn't exist` → 500。根因是项目从未给新表手工建表（spec 声称 create_all 自动但 lifespan 没调）。
+
+**修复完成清单**：
+
+- [x] 新增 `backend/sql/dev_sql.sql`：含 v0.6.0 三张表完整 `CREATE TABLE IF NOT EXISTS`（含 COMMENT / FK CASCADE / 索引）
+- [x] `backend/spec/README.md` §4 新增「数据库表手工建表规范」全局硬约束
+- [x] `backend/spec/cross_table_fill.md` §Assumption 2 改文本指向 dev_sql.sql
+- [x] `backend/spec/cross_table_fill.md` §11 v0.6.0.0.2 增补修订记录
+- [x] `backend/spec/email_notification.md` 引用 README §4
+- [x] `backend/.todo/cross_table_fill.md` 本文件标记完成
+- [ ] **（用户侧）人工跑 SQL**：在 MySQL `sparkmemo` 执行 `mysql -u root sparkmemo < backend/sql/dev_sql.sql`（或 pymysql 等价），重启 uvicorn，验证上传可 201

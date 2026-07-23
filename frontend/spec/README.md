@@ -196,7 +196,27 @@ frontend/
 | 5xx | 「服务异常，请稍后重试」 |
 | 非 pending 标记完成 | 「当前状态不允许此操作」 |
 
-### 3.6 兼容要求
+### 3.6 FormData 上传规则（v0.6.0 新增）
+
+> **背景（v0.6.0 修复）**：早期模块（如 `api/dsp_uploads.js`）在 multipart 上传时手动设置了 `headers: { 'Content-Type': 'multipart/form-data' }`，**但未带 `boundary=...` 参数**。axios 检测到用户手动设置 Content-Type 后，**不再自动补 boundary**，导致请求头是 `multipart/form-data`（无 boundary），服务端 multipart 解析器把文件字段识别为普通 form 字段读为字符串，最终 `Value error, Expected UploadFile, received: <class 'str'>` 报错。
+
+**全局规则**：
+
+1. **不要在 API 调用处手动设置 `Content-Type` 头**（`api/*.js`）—— 凡上传 `FormData` 时，绝不在 `client.post(...)` 的 `config.headers` 里写 `'Content-Type': 'multipart/form-data'`，**让 axios 自动追加 boundary**。
+2. **`api/client.js` 提供 request interceptor 兜底**：拦截 `cfg.data instanceof FormData` 的请求，自动 `delete cfg.headers['Content-Type']`（兼容任何模块旧代码错误地手动设置了 Content-Type 的情形）。**任何新增上传 API 自动受保护**。
+3. **后端 multipart 解析依赖 boundary**：浏览器 / axios / node-form-data 任意一处丢了 boundary，都会触发 Pydantic 「Expected UploadFile, received str」错误。开发排查时第一步必看 Network tab 的 Request Headers。
+
+| 调用方式 | 期望行为 |
+|---------|---------|
+| `client.post(url, formData)` | axios 自动设置 `multipart/form-data; boundary=...` |
+| `client.post(url, formData, { headers: { 'X-Custom': 'foo' } })` | 同上（只要不写 Content-Type） |
+| `client.post(url, formData, { headers: { 'Content-Type': 'multipart/form-data' } })` | **禁止** —— 触发 bug；interceptor 会自动 delete 该 header 防爆 |
+
+**§3.6 历史**：v0.5.x 时 `api/dsp_uploads.js` 即埋下此 bug，v0.6.0 引入 interceptor 一并根治，无需逐文件改 API 模块。
+
+**相关 spec**：[`./weekly_demand.md`](./weekly_demand.md) §5.1、[`./cross_table_fill.md`](./cross_table_fill.md) §4.1 均仅调 `client.post(url, formData)`，依赖本节全局规则 + interceptor 兜底。
+
+### 3.7 兼容要求
 
 | 项 | 要求 |
 |----|------|
@@ -220,6 +240,8 @@ frontend/
 | 任务管理后端 spec | [../backend/spec/task_management.md](../backend/spec/task_management.md) |
 | OpenAPI 接口契约 | [../backend/openapi/task_management.json](../backend/openapi/task_management.json) |
 | 前端任务管理模块规格 | [./task_management.md](./task_management.md) |
+| 前端周需求管理模块规格（含 DSP 上传） | [./weekly_demand.md](./weekly_demand.md) |
+| 前端跨表数据填充模块规格（含 multipart 上传） | [./cross_table_fill.md](./cross_table_fill.md) |
 
 ---
 
