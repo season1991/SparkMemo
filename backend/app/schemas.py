@@ -606,3 +606,152 @@ class WeekInfo(BaseModel):
 
 
 # ========== 透视查询 模块结束 ==========
+
+
+# ========== 跨表数据填充（v0.6.0）==========
+
+
+# 模式枚举：与 ORM 字段约束保持一致
+MappingMode = Literal["overwrite", "new_column"]
+JoinMode = Literal["left", "inner"]
+MatchMode = Literal["merge_multi", "first", "last"]
+JobStatus = Literal["pending", "configured", "executed", "failed", "expired"]
+
+
+class CrossTableFillMappingItem(BaseModel):
+    """单条映射条目：base_field → target_field（含 mode 必填）。"""
+
+    base_field: str = Field(..., description="基础表中要填充的字段名")
+    target_field: str = Field(..., description="目标表中落点字段名")
+    mode: MappingMode = Field(..., description="填充模式：overwrite 覆盖同名列；new_column 追加新列")
+
+
+class CrossTableFillUploadResponse(BaseModel):
+    """POST /jobs 上传响应：返回 job_id 与两张表的 headers + 行数。
+
+    不返回 data，避免大数据量进入前端（spec §工作流 1.3）。
+    """
+
+    job_id: int
+    target_filename: str
+    base_filename: str
+    target_headers: list[str]
+    base_headers: list[str]
+    target_row_count: int
+    base_row_count: int
+    status: JobStatus
+    expires_at: str
+
+
+class CrossTableFillJobRead(BaseModel):
+    """单查 job 响应。
+
+    `result_row_count` / `filled_count` / `unmatched_count` / `multi_match_count`
+    在 status='executed' 时才有值。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    target_filename: str
+    base_filename: str
+    target_headers: list[str]
+    base_headers: list[str]
+    target_row_count: int
+    base_row_count: int
+    status: JobStatus
+    result_row_count: Optional[int] = None
+    filled_count: Optional[int] = None
+    unmatched_count: Optional[int] = None
+    multi_match_count: Optional[int] = None
+    created_at: str
+    updated_at: str
+    expires_at: str
+
+
+class CrossTableFillJobListResponse(BaseModel):
+    """job 列表分页响应。"""
+
+    items: list[CrossTableFillJobRead]
+    total: int
+    page: int
+    size: int
+
+
+class CrossTableFillConfigRequest(BaseModel):
+    """PATCH /config 请求体。
+
+    confirm_token 规则：mappings 含 overwrite 时必填；全为 new_column 时必须为 None。
+    注意：token 一致性校验不在此处做（model_validator 抛 ValueError 会被 FastAPI 翻成
+    422，而 spec 要求 409），交由 endpoint 抛 HTTPException(409)。
+    """
+
+    target_keys: list[str] = Field(..., min_length=1, description="目标表主键字段名列表")
+    base_keys: list[str] = Field(..., min_length=1, description="基础表主键字段名列表，与 target_keys 等长按位置对应")
+    mappings: list[CrossTableFillMappingItem] = Field(..., min_length=1, description="映射规则")
+    join_mode: JoinMode = "left"
+    match_mode: MatchMode = "merge_multi"
+    case_sensitive: bool = True
+    trim_strings: bool = True
+    confirm_token: Optional[str] = Field(default=None, max_length=64, description="overwrite 模式必填的二次确认 token")
+
+    @model_validator(mode="after")
+    def _keys_equal_length(self) -> "CrossTableFillConfigRequest":
+        """target_keys 与 base_keys 长度必须相等。"""
+        if len(self.target_keys) != len(self.base_keys):
+            raise ValueError("target_keys and base_keys must have equal length")
+        return self
+
+
+class CrossTableFillConfigDigest(BaseModel):
+    """config 摘要：返回后用于前端展示与 warnings 关联。
+
+    注意：所有布尔 / 枚举字段直接回给前端，便于 UI 反显。
+    """
+
+    target_keys: list[str]
+    base_keys: list[str]
+    mapping_count: int
+    has_overwrite: bool
+    has_new_column: bool
+    join_mode: JoinMode
+    match_mode: MatchMode
+    case_sensitive: bool
+    trim_strings: bool
+
+
+class CrossTableFillConfigResponse(BaseModel):
+    """PATCH /config 响应：200 + config_digest + 可选 warnings。"""
+
+    job_id: int
+    status: JobStatus
+    config_digest: CrossTableFillConfigDigest
+    warnings: list[str] = []
+
+
+class CrossTableFillExecuteSummary(BaseModel):
+    """execute 结果摘要。"""
+
+    target_row_count: int
+    result_row_count: int
+    filled_count: int
+    unmatched_count: int
+    multi_match_count: int
+
+
+class CrossTableFillExecuteResponse(BaseModel):
+    """POST /execute 响应：双轨交付（preview + download_token）。
+
+    preview 长度上限 1000；xlsx 包含全部行。
+    """
+
+    job_id: int
+    status: JobStatus
+    summary: CrossTableFillExecuteSummary
+    preview_headers: list[str]
+    preview: list[dict]
+    download_token: str
+    download_url: str
+
+
+# ========== 跨表数据填充 模块结束 ==========

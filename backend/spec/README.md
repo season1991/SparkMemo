@@ -80,6 +80,7 @@ SparkMemo/
 | 任务管理 | [./task_management.md](./task_management.md) | [x] 已完成 |
 | 今日概述 | [./dashboard.md](./dashboard.md) | [x] 已完成 |
 | 周需求管理 | [./weekly_demand.md](./weekly_demand.md) | [x] 已完成（v0.5.4：含 DSP 上传 / 查询 / 删除 3 子功能） |
+| 跨表数据填充 | [./cross_table_fill.md](./cross_table_fill.md) | [x] 已完成（v0.6.0：上传/配置/执行/下载，含 left-join + merge_multi + overwrite/new_column 双模式） |
 
 
 ## 5. 开发规范

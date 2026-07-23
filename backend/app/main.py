@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.api import (
     companies,
+    cross_table_fill,
     dashboard,
     dsp_uploads,
     email_config,
@@ -89,7 +90,7 @@ async def lifespan(_app: FastAPI):
             apscheduler_instance.shutdown(wait=False)
 
 
-app = FastAPI(title="SparkMemo", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="SparkMemo", version="0.6.0", lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
@@ -120,3 +121,4 @@ app.include_router(dsp_uploads.router)
 app.include_router(pivot_query.router)
 app.include_router(pivot_query_lookups.router)
 app.include_router(html_to_excel.router)
+app.include_router(cross_table_fill.router)

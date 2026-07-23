@@ -202,3 +202,101 @@ class WeekDt(Base):
 
 
 # ========== 透视查询 模块结束 ==========
+
+
+# ========== 跨表数据填充（v0.6.0）==========
+
+
+class CrossTableFillJob(Base):
+    """跨表数据填充任务元数据表。
+
+    三张表的顶层；上传即创建。状态机：pending → configured → executed / failed / expired。
+    `target_headers` / `base_headers` 以 JSON 字符串存储，因 Excel 列名任意。
+    """
+
+    __tablename__ = "cross_table_fill_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    target_filename: Mapped[str] = mapped_column(String(256), nullable=False)  # 原 target xlsx 文件名
+    base_filename: Mapped[str] = mapped_column(String(256), nullable=False)    # 原 base xlsx 文件名
+    target_headers: Mapped[str] = mapped_column(String(2000), nullable=False) # JSON 字符串
+    base_headers: Mapped[str] = mapped_column(String(2000), nullable=False)   # JSON 字符串
+    target_row_count: Mapped[int] = mapped_column(Integer, nullable=False)    # target 数据行数
+    base_row_count: Mapped[int] = mapped_column(Integer, nullable=False)      # base 数据行数
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")  # 状态机
+    result_row_count: Mapped[Optional[int]] = mapped_column(Integer)          # 执行后写入 target 行数
+    filled_count: Mapped[Optional[int]] = mapped_column(Integer)              # ≥1 个 mapping 填充成功的行数
+    unmatched_count: Mapped[Optional[int]] = mapped_column(Integer)           # base 缺该 key 的行数
+    multi_match_count: Mapped[Optional[int]] = mapped_column(Integer)         # 命中 ≥2 行的行数
+    created_at: Mapped[str] = mapped_column(String(10), default=_today_str, nullable=False)   # YYYY-MM-DD
+    updated_at: Mapped[str] = mapped_column(String(10), default=_today_str, onupdate=_today_str, nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(10), nullable=False)       # YYYY-MM-DD；+24h
+
+    rows: Mapped[list["CrossTableFillRow"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    config: Mapped[Optional["CrossTableFillConfig"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class CrossTableFillRow(Base):
+    """跨表数据填充行明细表。role 字段统一存 target / base 两张表的全量数据。
+
+    `data` 为 JSON 字符串，因 Excel 任意列名无法映射到固定 SQL 列。
+    `key_value` 在 execute 阶段由配置归一化生成；非执行阶段为 NULL。
+    """
+
+    __tablename__ = "cross_table_fill_rows"
+    __table_args__ = (
+        # role 上加一个普通索引配合 FK 索引方便单边查询（target-only / base-only）
+        {"mysql_engine": "InnoDB", "sqlite_with_rowid": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("cross_table_fill_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # target / base
+    row_index: Mapped[int] = mapped_column(Integer, nullable=False)           # 0-based，原 Excel 行号（不含表头）
+    key_value: Mapped[Optional[str]] = mapped_column(String(1024))             # 主键值归一化拼接字符串
+    data: Mapped[str] = mapped_column(String(8192), nullable=False)            # JSON 字符串，整行字段值字典
+
+    job: Mapped["CrossTableFillJob"] = relationship(back_populates="rows")
+
+
+class CrossTableFillConfig(Base):
+    """跨表数据填充匹配配置表。job_id 同时是 PK 和 FK；一一对应。
+
+    `target_keys` / `base_keys` / `mappings` 全部以 JSON 字符串存储。
+    overwrite 模式下 `confirm_token` 必填；new_column only 时必为 None。
+    """
+
+    __tablename__ = "cross_table_fill_configs"
+
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("cross_table_fill_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    target_keys: Mapped[str] = mapped_column(String(512), nullable=False)  # JSON list[str]
+    base_keys: Mapped[str] = mapped_column(String(512), nullable=False)    # JSON list[str]
+    mappings: Mapped[str] = mapped_column(String(8192), nullable=False)     # JSON list[{base_field, target_field, mode}]
+    join_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="left")         # left / inner
+    match_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="merge_multi") # merge_multi / first / last
+    case_sensitive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trim_strings: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    confirm_token: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[str] = mapped_column(String(10), default=_today_str, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(10), default=_today_str, onupdate=_today_str, nullable=False)
+
+    job: Mapped["CrossTableFillJob"] = relationship(back_populates="config")
+
+
+# ========== 跨表数据填充 模块结束 ==========

@@ -1,0 +1,971 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SparkMemo Cross-Table Fill API",
+    "version": "0.6.0",
+    "description": "跨表数据填充模块 API 契约（v0.6.0）"
+  },
+  "paths": {
+    "/api/cross-table-fill/jobs": {
+      "post": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "Create Job Endpoint",
+        "description": "上传 + 解析两张表（multipart），返回 job_id 与 headers + 行数。\n\n参数:\n    target_file: 目标表 xlsx；MIME 必须 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。\n    base_file: 基础表 xlsx；同上。\n    expires_in_hours: 过期小时数（1-168；默认 24）。\n    db: FastAPI 注入的 Session。\n\n返回:\n    CrossTableFillUploadResponse: 含 job_id / headers / row_count / status / expires_at。\n\n异常:\n    413: 任一文件 > 20 MB。\n    422: 任一文件 MIME 不符 / 工作簿无 sheet / 表头为空 / 表头重复。\n    400: 任一文件 cell 含不支持类型。",
+        "operationId": "create_job_endpoint_api_cross_table_fill_jobs_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_job_endpoint_api_cross_table_fill_jobs_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrossTableFillUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "List Jobs Endpoint",
+        "description": "job 列表（按 id 倒序），可选 status 过滤。",
+        "operationId": "list_jobs_endpoint_api_cross_table_fill_jobs_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Size"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrossTableFillJobListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cross-table-fill/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "Get Job Endpoint",
+        "description": "单查 job 元数据。\n\n参数:\n    job_id: 任务主键。\n    db: FastAPI 注入的 Session。\n\n返回:\n    CrossTableFillJobRead: 单个 job 的元数据 + 状态与执行摘要。\n\n异常:\n    404: job_id 不存在。",
+        "operationId": "get_job_endpoint_api_cross_table_fill_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrossTableFillJobRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "Delete Job Endpoint",
+        "description": "主动清理 job（级联清 rows / configs）。",
+        "operationId": "delete_job_endpoint_api_cross_table_fill_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cross-table-fill/jobs/{job_id}/config": {
+      "patch": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "Patch Config Endpoint",
+        "description": "提交主键 + 映射配置。\n\n参数:\n    job_id: job 主键。\n    payload: 配置请求体（含 join_mode / match_mode / case_sensitive / trim_strings / confirm_token）。\n    db: FastAPI 注入的 Session。\n\n返回:\n    CrossTableFillConfigResponse: 含 config_digest + warnings。\n\n异常:\n    404: job_id 不存在。\n    409: job 已 executed / 过期；overwrite 缺 token；全 new_column 多 token。\n    422: 字段缺失 / mode 取值非法 / keys 不等长（由 Pydantic 拦截）。",
+        "operationId": "patch_config_endpoint_api_cross_table_fill_jobs__job_id__config_patch",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrossTableFillConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrossTableFillConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cross-table-fill/jobs/{job_id}/execute": {
+      "post": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "Execute Job Endpoint",
+        "description": "执行匹配，返回前 1000 行预览 + download_token（5 min TTL）。",
+        "operationId": "execute_job_endpoint_api_cross_table_fill_jobs__job_id__execute_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrossTableFillExecuteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cross-table-fill/jobs/{job_id}/download": {
+      "get": {
+        "tags": [
+          "cross-table-fill"
+        ],
+        "summary": "Download Job Endpoint",
+        "description": "下载执行结果 xlsx；需 5 min 内有效的 token。\n\n返回:\n    StreamingResponse: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`\n    二进制流 + `Content-Disposition: attachment; filename=\"...\"`。\n\n异常:\n    401: token 缺失 / 错误 / 过期。\n    404: job 不存在。\n    409: job.status != 'executed'（即便 token 合法）。",
+        "operationId": "download_job_endpoint_api_cross_table_fill_jobs__job_id__download_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_create_job_endpoint_api_cross_table_fill_jobs_post": {
+        "properties": {
+          "target_file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Target File"
+          },
+          "base_file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Base File"
+          },
+          "expires_in_hours": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In Hours"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_file",
+          "base_file"
+        ],
+        "title": "Body_create_job_endpoint_api_cross_table_fill_jobs_post"
+      },
+      "CrossTableFillConfigDigest": {
+        "properties": {
+          "target_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Keys"
+          },
+          "base_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Base Keys"
+          },
+          "mapping_count": {
+            "type": "integer",
+            "title": "Mapping Count"
+          },
+          "has_overwrite": {
+            "type": "boolean",
+            "title": "Has Overwrite"
+          },
+          "has_new_column": {
+            "type": "boolean",
+            "title": "Has New Column"
+          },
+          "join_mode": {
+            "type": "string",
+            "enum": [
+              "left",
+              "inner"
+            ],
+            "title": "Join Mode"
+          },
+          "match_mode": {
+            "type": "string",
+            "enum": [
+              "merge_multi",
+              "first",
+              "last"
+            ],
+            "title": "Match Mode"
+          },
+          "case_sensitive": {
+            "type": "boolean",
+            "title": "Case Sensitive"
+          },
+          "trim_strings": {
+            "type": "boolean",
+            "title": "Trim Strings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_keys",
+          "base_keys",
+          "mapping_count",
+          "has_overwrite",
+          "has_new_column",
+          "join_mode",
+          "match_mode",
+          "case_sensitive",
+          "trim_strings"
+        ],
+        "title": "CrossTableFillConfigDigest",
+        "description": "config 摘要：返回后用于前端展示与 warnings 关联。\n\n注意：所有布尔 / 枚举字段直接回给前端，便于 UI 反显。"
+      },
+      "CrossTableFillConfigRequest": {
+        "properties": {
+          "target_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Target Keys",
+            "description": "目标表主键字段名列表"
+          },
+          "base_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Base Keys",
+            "description": "基础表主键字段名列表，与 target_keys 等长按位置对应"
+          },
+          "mappings": {
+            "items": {
+              "$ref": "#/components/schemas/CrossTableFillMappingItem"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Mappings",
+            "description": "映射规则"
+          },
+          "join_mode": {
+            "type": "string",
+            "enum": [
+              "left",
+              "inner"
+            ],
+            "title": "Join Mode",
+            "default": "left"
+          },
+          "match_mode": {
+            "type": "string",
+            "enum": [
+              "merge_multi",
+              "first",
+              "last"
+            ],
+            "title": "Match Mode",
+            "default": "merge_multi"
+          },
+          "case_sensitive": {
+            "type": "boolean",
+            "title": "Case Sensitive",
+            "default": true
+          },
+          "trim_strings": {
+            "type": "boolean",
+            "title": "Trim Strings",
+            "default": true
+          },
+          "confirm_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Token",
+            "description": "overwrite 模式必填的二次确认 token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_keys",
+          "base_keys",
+          "mappings"
+        ],
+        "title": "CrossTableFillConfigRequest",
+        "description": "PATCH /config 请求体。\n\nconfirm_token 规则：mappings 含 overwrite 时必填；全为 new_column 时必须为 None。\n注意：token 一致性校验不在此处做（model_validator 抛 ValueError 会被 FastAPI 翻成\n422，而 spec 要求 409），交由 endpoint 抛 HTTPException(409)。"
+      },
+      "CrossTableFillConfigResponse": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "configured",
+              "executed",
+              "failed",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "config_digest": {
+            "$ref": "#/components/schemas/CrossTableFillConfigDigest"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "config_digest"
+        ],
+        "title": "CrossTableFillConfigResponse",
+        "description": "PATCH /config 响应：200 + config_digest + 可选 warnings。"
+      },
+      "CrossTableFillExecuteResponse": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "configured",
+              "executed",
+              "failed",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CrossTableFillExecuteSummary"
+          },
+          "preview_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Preview Headers"
+          },
+          "preview": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Preview"
+          },
+          "download_token": {
+            "type": "string",
+            "title": "Download Token"
+          },
+          "download_url": {
+            "type": "string",
+            "title": "Download Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "summary",
+          "preview_headers",
+          "preview",
+          "download_token",
+          "download_url"
+        ],
+        "title": "CrossTableFillExecuteResponse",
+        "description": "POST /execute 响应：双轨交付（preview + download_token）。\n\npreview 长度上限 1000；xlsx 包含全部行。"
+      },
+      "CrossTableFillExecuteSummary": {
+        "properties": {
+          "target_row_count": {
+            "type": "integer",
+            "title": "Target Row Count"
+          },
+          "result_row_count": {
+            "type": "integer",
+            "title": "Result Row Count"
+          },
+          "filled_count": {
+            "type": "integer",
+            "title": "Filled Count"
+          },
+          "unmatched_count": {
+            "type": "integer",
+            "title": "Unmatched Count"
+          },
+          "multi_match_count": {
+            "type": "integer",
+            "title": "Multi Match Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_row_count",
+          "result_row_count",
+          "filled_count",
+          "unmatched_count",
+          "multi_match_count"
+        ],
+        "title": "CrossTableFillExecuteSummary",
+        "description": "execute 结果摘要。"
+      },
+      "CrossTableFillJobListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CrossTableFillJobRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "title": "CrossTableFillJobListResponse",
+        "description": "job 列表分页响应。"
+      },
+      "CrossTableFillJobRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "target_filename": {
+            "type": "string",
+            "title": "Target Filename"
+          },
+          "base_filename": {
+            "type": "string",
+            "title": "Base Filename"
+          },
+          "target_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Headers"
+          },
+          "base_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Base Headers"
+          },
+          "target_row_count": {
+            "type": "integer",
+            "title": "Target Row Count"
+          },
+          "base_row_count": {
+            "type": "integer",
+            "title": "Base Row Count"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "configured",
+              "executed",
+              "failed",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "result_row_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Row Count"
+          },
+          "filled_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled Count"
+          },
+          "unmatched_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unmatched Count"
+          },
+          "multi_match_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multi Match Count"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "target_filename",
+          "base_filename",
+          "target_headers",
+          "base_headers",
+          "target_row_count",
+          "base_row_count",
+          "status",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ],
+        "title": "CrossTableFillJobRead",
+        "description": "单查 job 响应。\n\n`result_row_count` / `filled_count` / `unmatched_count` / `multi_match_count`\n在 status='executed' 时才有值。"
+      },
+      "CrossTableFillMappingItem": {
+        "properties": {
+          "base_field": {
+            "type": "string",
+            "title": "Base Field",
+            "description": "基础表中要填充的字段名"
+          },
+          "target_field": {
+            "type": "string",
+            "title": "Target Field",
+            "description": "目标表中落点字段名"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "new_column"
+            ],
+            "title": "Mode",
+            "description": "填充模式：overwrite 覆盖同名列；new_column 追加新列"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_field",
+          "target_field",
+          "mode"
+        ],
+        "title": "CrossTableFillMappingItem",
+        "description": "单条映射条目：base_field → target_field（含 mode 必填）。"
+      },
+      "CrossTableFillUploadResponse": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "target_filename": {
+            "type": "string",
+            "title": "Target Filename"
+          },
+          "base_filename": {
+            "type": "string",
+            "title": "Base Filename"
+          },
+          "target_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Headers"
+          },
+          "base_headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Base Headers"
+          },
+          "target_row_count": {
+            "type": "integer",
+            "title": "Target Row Count"
+          },
+          "base_row_count": {
+            "type": "integer",
+            "title": "Base Row Count"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "configured",
+              "executed",
+              "failed",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "target_filename",
+          "base_filename",
+          "target_headers",
+          "base_headers",
+          "target_row_count",
+          "base_row_count",
+          "status",
+          "expires_at"
+        ],
+        "title": "CrossTableFillUploadResponse",
+        "description": "POST /jobs 上传响应：返回 job_id 与两张表的 headers + 行数。\n\n不返回 data，避免大数据量进入前端（spec §工作流 1.3）。"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
